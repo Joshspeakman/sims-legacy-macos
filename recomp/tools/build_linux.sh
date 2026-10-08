@@ -9,10 +9,12 @@ python3 "$HERE/tools/compiler_compat.py" "$CC" "$OUT/compiler-flags.txt"
 read -ra COMPAT_FLAGS < "$OUT/compiler-flags.txt"
 EXE=$OUT/DungeonSiege2.exe; APP=DungeonSiege2Linux
 [[ -f "$OUT/FalloutNV.exe" ]] && { EXE=$OUT/FalloutNV.exe; APP=FalloutNVLinux; }
+[[ -f "$OUT/Sims.exe" ]] && { EXE=$OUT/Sims.exe; APP=SimsLinux; }
 EDITION=$(PYTHONPATH="$HERE/tools" python3 -c 'import sys; from editions import identify; print(identify(sys.argv[1], prepared=True))' "$EXE")
 EDITION_FLAGS=()
 [[ "$EDITION" == broken-world ]] && EDITION_FLAGS=(-DDS2_BROKEN_WORLD)
 [[ "$EDITION" == fnv ]] && EDITION_FLAGS=(-DFNV_EDITION)
+[[ "$EDITION" == sims ]] && EDITION_FLAGS=(-DSIMS_EDITION)
 DEPS=(sdl2 freetype2 fontconfig sndfile glew libpng)
 pkg-config --exists "${DEPS[@]}"
 read -ra CFLAGS <<< "$(pkg-config --cflags "${DEPS[@]}")"

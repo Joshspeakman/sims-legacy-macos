@@ -95,6 +95,12 @@ int rt_override(Ctx *c, uint32_t addr)
         c->eax = (c->eax & 0xffffff00u) | 1u;
         c->esp += 8;
         return 1;
+#elif defined(SIMS_EDITION)
+    case 0x00467020u:
+        /* The Sims: crash reporting (crashpad with a Backtrace upload URL) starts crashpad_handler.exe and stops the
+         * game when it can't; the port writes its own crash reports. cdecl (url, handler path, database name). */
+        c->eax = 0; c->esp += 4;
+        return 1;
 #else
     case 0x007663b0u: return keep_multiplayer_button(c);
 #endif

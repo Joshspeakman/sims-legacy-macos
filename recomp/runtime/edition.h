@@ -1,7 +1,23 @@
 /* Address-specific hooks and user-data names must follow the compiled executable. */
 #ifndef DS2_EDITION_H
 #define DS2_EDITION_H
-#ifdef FNV_EDITION
+#ifdef SIMS_EDITION
+/* The Sims Legacy Collection (Steam 3314060, build 17905164, unwrapped by tools/steamstub.py): no Dungeon Siege hooks */
+#define DS2_IMAGE_END 0x00b02000u
+#define DS2_TITLE "The Sims Legacy Collection"
+#define DS2_DOCUMENTS "The Sims"
+#define DS2_INI "Sims.ini"
+#define GAME_EXE "Sims.exe"
+#define DS2_LIGHT_LOOP 0xffffff00u
+#define DS2_LIGHT_AFTER 0xffffff01u
+#define DS2_LIGHT_ZERO 0u
+#define DS2_LIGHT_ONE 0u
+#define DS2_LIGHT_SCALE 0u
+#define DS2_MAT3 0xffffff02u
+#define DS2_MAT3_FN fnv_no_mat3
+#define DS2_MOOD_READ 0xffffff03u
+#define DS2_SKRIT_MANAGER 0u
+#elif defined(FNV_EDITION)
 /* Fallout: New Vegas (GOG 1.4.0.525): no Dungeon Siege hooks; the names below are what the host and registry use */
 #define DS2_IMAGE_END 0x01409000u
 #define DS2_TITLE "Fallout: New Vegas"

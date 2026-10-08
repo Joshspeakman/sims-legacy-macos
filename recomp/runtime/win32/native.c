@@ -115,7 +115,7 @@ static void light_dir_check(Ctx *c)
  * transform of the terrain's vertices (about a seventh of the game thread, called for every vertex). The x87 order:
  * out0 = (v1 m1 + v0 m0) + v2 m2, out1 = (v1 m4 + v0 m3) + v2 m5, out2 = v2 m8 + (v1 m7 + v0 m6), each product and sum
  * rounded by precision control, then stored as floats. */
-#ifdef FNV_EDITION
+#if defined(FNV_EDITION) || defined(SIMS_EDITION)
 static void fnv_no_mat3(Ctx *c) { (void)c; }                 /* no native hot loops for Fallout NV (yet) */
 #else
 void DS2_MAT3_FN(Ctx *c);                                 /* the recompiled original (check mode) */

@@ -33,6 +33,7 @@ IMPL(kernel32, HeapSize) { RET(heap_size(ARG(0), ARG(2)), 3); }
 IMPL(kernel32, LocalAlloc) { RET(heap_alloc(w32_process_heap, (ARG(0) & 0x40) ? 8 : 0, ARG(1)), 2); }   /* LMEM_ZEROINIT */
 IMPL(kernel32, lstrlenA) { RET(ARG(0) ? strlen(GS(ARG(0))) : 0, 1); }
 IMPL(kernel32, lstrlenW) { uint32_t p = ARG(0), n = 0; if (p) while (rt_r16(G_MEM, p + 2 * n)) n++; RET(n, 1); }
+IMPL(kernel32, lstrcmpA) { RET((uint32_t)strcmp(GS(ARG(0)), GS(ARG(1))), 2); }
 IMPL(kernel32, lstrcmpiA) { RET((uint32_t)strcasecmp(GS(ARG(0)), GS(ARG(1))), 2); }
 IMPL(kernel32, lstrcpynA)
 {

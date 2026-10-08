@@ -10,6 +10,7 @@ def canon(dll, fn):
     d = dll.split('.')[0].lower()
     if d.startswith('d3dx9_'): d = 'd3dx9_29'                  # loader.c: one D3DX9 for every version
     if fn.startswith('#'): return '%s!ord%s' % (d, fn[1:])
+    if fn[:4] in ('??2@', '??3@'): return '%s!%s' % (d, 'op_new' if fn[2] == '2' else 'op_delete')
     if fn.startswith('_') and '@' in fn: fn = fn[1:]
     return '%s!%s' % (d, fn.split('@')[0])
 skip = set(a.lower() for a in os.environ.get('GAP_SKIP_DLLS', '').split(',') if a)

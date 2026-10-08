@@ -1,6 +1,8 @@
 /* PE resources (the game's own image in guest memory, or another PE file on disk), VERSION.dll, and assorted
  * KERNEL32 text/resource functions. */
 #include "w32.h"
+#include "edition.h"
+extern const struct rt_image { const char *name; uint32_t base, imp_first, imp_count; } rt_images[]; extern const unsigned rt_images_n;
 
 /* resource directory lookup: base = image base, rsrc = guest address of the resource directory root */
 static uint32_t rsrc_root(uint32_t base)
@@ -40,10 +42,15 @@ static uint32_t find_resource(uint32_t base, uint32_t type, uint32_t name, uint3
     if (!l) l = dir_find(root, d, 0xffffffffu);
     return l && !(l & 0x80000000u) ? root + l : 0;
 }
-static uint32_t base_of(uint32_t h) { return (!h || h == w32_image_base) ? w32_image_base : 0; }
+static uint32_t base_of(uint32_t h)                     /* the executable, or a mapped recompiled DLL */
+{
+    if (!h || h == w32_image_base) return w32_image_base;
+    for (unsigned k = 1; k < rt_images_n; k++) if (h == rt_images[k].base && rt_r16(G_MEM, h) == 0x5a4d) return h;
+    return 0;
+}
 IMPL(kernel32, FindResourceA) { uint32_t b = base_of(ARG(0)); RET(b ? find_resource(b, ARG(2), ARG(1), 0x409) : 0, 3); }
 IMPL(kernel32, FindResourceExA) { uint32_t b = base_of(ARG(0)); RET(b ? find_resource(b, ARG(1), ARG(2), ARG(3) & 0xffff) : 0, 4); }
-IMPL(kernel32, LoadResource) { uint32_t r = ARG(1); RET(r ? w32_image_base + rt_r32(G_MEM, r) : 0, 2); }
+IMPL(kernel32, LoadResource) { uint32_t r = ARG(1), b = base_of(ARG(0)); RET(r && b ? b + rt_r32(G_MEM, r) : 0, 2); }
 IMPL(kernel32, LockResource) { RET(ARG(0), 1); }
 IMPL(kernel32, SizeofResource) { uint32_t r = ARG(1); RET(r ? rt_r32(G_MEM, r + 4) : 0, 2); }
 static int enum_dir(Ctx *c, uint32_t root, uint32_t dir, uint32_t fn, const uint32_t *pre, int npre, uint32_t lp, int want_lang)
@@ -82,27 +89,32 @@ IMPL(kernel32, EnumResourceLanguagesA)
     uint32_t pre[3] = {ARG(0) ? ARG(0) : b, ARG(1), ARG(2)}; enum_dir(c, root, root + (e & 0x7fffffffu), ARG(3), pre, 3, ARG(4), 1); RET(1, 5);
 }
 
-/* ---- VERSION.dll: version resources of the game's own executable (other files: none) ---- */
-static int is_own_exe(const char *path)
+/* ---- VERSION.dll: version resources of the game's own executable and its recompiled DLLs (other files: none) ---- */
+static uint32_t own_image(const char *path)
 {
     const char *s = strrchr(path, '\\'), *t = strrchr(path, '/'); if (t > s) s = t; s = s ? s + 1 : path;
-    return !strcasecmp(s, "DungeonSiege.exe");
+    if (!strcasecmp(s, GAME_EXE)) return w32_image_base;
+    for (unsigned k = 1; k < rt_images_n; k++) {
+        const char *n = rt_images[k].name, *b = strrchr(n, '/'); b = b ? b + 1 : n;
+        if (!strcasecmp(s, b) && rt_r16(G_MEM, rt_images[k].base) == 0x5a4d) return rt_images[k].base;   /* mapped */
+    }
+    return 0;
 }
-static uint32_t own_version(uint32_t *len)
+static uint32_t own_version_of(uint32_t base, uint32_t *len)
 {
-    uint32_t r = find_resource(w32_image_base, 16, 1, 0x409);
+    uint32_t r = base ? find_resource(base, 16, 1, 0x409) : 0;
     if (!r) return 0;
-    *len = rt_r32(G_MEM, r + 4); return w32_image_base + rt_r32(G_MEM, r);
+    *len = rt_r32(G_MEM, r + 4); return base + rt_r32(G_MEM, r);
 }
 IMPL(version, GetFileVersionInfoSizeA)
 {
     uint32_t len = 0; if (ARG(1)) rt_w32(G_MEM, ARG(1), 0);
-    if (!is_own_exe(GS(ARG(0))) || !own_version(&len)) { w32_set_last_error(c, 1813); RET(0, 2); }
+    if (!own_version_of(own_image(GS(ARG(0))), &len)) { w32_set_last_error(c, 1813); RET(0, 2); }
     RET(len * 3, 2);                                   /* room for ANSI copies of the strings, like Windows */
 }
 IMPL(version, GetFileVersionInfoA)
 {
-    uint32_t len = 0, src = is_own_exe(GS(ARG(0))) ? own_version(&len) : 0, n = ARG(2), data = ARG(3);
+    uint32_t len = 0, src = own_version_of(own_image(GS(ARG(0))), &len), n = ARG(2), data = ARG(3);
     if (!src) { w32_set_last_error(c, 1813); RET(0, 4); }
     memset(GP(data), 0, n); memcpy(GP(data), GP(src), len < n ? len : n);
     rt_w32(G_MEM, data + len, 0);                      /* where ANSI conversions go (after the block) */

@@ -24,12 +24,15 @@ echo "== analysis"
 sed -n '/^functions /p; /^decode failures:/p; /^jump tables /p; /^SEH:/p' "$OUT/analysis.log"
 echo "== lifting"
 "$PY" "$HERE/tools/lift.py" "$EXE" "$OUT/analysis.json" "$OUT" --game sims | grep -Ev '^unsupported: \{\}$'
-# the game's own DLLs, loaded by name at run time: gimex (EA's image codecs) and the Intel JPEG library it uses
+# the game's own DLLs, loaded by name at run time: gimex (EA's image codecs) and the Intel JPEG library it imports.
+# Both want 0x60000000, so ijl10 is lifted from a copy relocated to 0x61000000 (tools/rebase_pe.py); loader.c applies
+# the same relocations to the original at run time.
 NIMP=$("$PY" -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["imports"]))' "$OUT/image.json")
 IMGS=("=")
-for rel in gimex.dll ijl10.dll; do
-  tag=$(echo "$rel" | tr . _); src="$GAME/$rel"
+for spec in gimex.dll ijl10.dll@0x61000000; do
+  rel=${spec%@*}; tag=$(echo "$rel" | tr . _); src="$GAME/$rel"
   [ -f "$src" ] || { echo "missing $src"; exit 1; }
+  if [[ $spec == *@* ]]; then "$PY" "$HERE/tools/rebase_pe.py" "$src" "$OUT/$rel" "${spec#*@}"; src="$OUT/$rel"; fi
   "$PY" "$HERE/tools/analyze.py" "$src" "$OUT/$tag.json" | head -1
   "$PY" "$HERE/tools/lift.py" "$src" "$OUT/$tag.json" "$OUT" --tag "$tag" --imp-base "$NIMP" | grep -E 'lifted|internal'
   NIMP=$((NIMP + $("$PY" -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["imports"]))' "$OUT/${tag}_image.json")))
