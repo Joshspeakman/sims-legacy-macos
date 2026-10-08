@@ -35,6 +35,7 @@ void *vkh_host(uint32_t guest);
 void vkh_forget(const void *host);
 
 void vk_unknown_stype(uint32_t stype);
+VkFormat vk_fix_format(VkFormat f);                    /* formats the device lacks, swapped for one it has (vulkan.c) */
 extern int vk_trace;
 #define VK_TRACE(name, r) do { if (vk_trace || ((int32_t)(r) < 0 && (int32_t)(r) != -1000001004)) fprintf(stderr, "vulkan: %s -> %d\n", name, (int32_t)(r)); } while (0)
 

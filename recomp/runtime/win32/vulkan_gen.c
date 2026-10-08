@@ -20,6 +20,31 @@ void cout_VkApplicationInfo(uint32_t g, const VkApplicationInfo *h)
     VKW32(g + 20, (uint64_t)h->engineVersion);
     VKW32(g + 24, (uint64_t)h->apiVersion);
 }
+void cin_VkAttachmentDescription(VkArena *a, uint32_t g, VkAttachmentDescription *h)
+{
+    (void)a; memset(h, 0, sizeof *h);
+    h->flags = (VkAttachmentDescriptionFlags)VKR32(g + 0);
+    h->format = vk_fix_format((VkFormat)VKR32(g + 4));
+    h->samples = (VkSampleCountFlagBits)VKR32(g + 8);
+    h->loadOp = (VkAttachmentLoadOp)VKR32(g + 12);
+    h->storeOp = (VkAttachmentStoreOp)VKR32(g + 16);
+    h->stencilLoadOp = (VkAttachmentLoadOp)VKR32(g + 20);
+    h->stencilStoreOp = (VkAttachmentStoreOp)VKR32(g + 24);
+    h->initialLayout = (VkImageLayout)VKR32(g + 28);
+    h->finalLayout = (VkImageLayout)VKR32(g + 32);
+}
+void cout_VkAttachmentDescription(uint32_t g, const VkAttachmentDescription *h)
+{
+    VKW32(g + 0, (uint64_t)h->flags);
+    VKW32(g + 4, (uint64_t)h->format);
+    VKW32(g + 8, (uint64_t)h->samples);
+    VKW32(g + 12, (uint64_t)h->loadOp);
+    VKW32(g + 16, (uint64_t)h->storeOp);
+    VKW32(g + 20, (uint64_t)h->stencilLoadOp);
+    VKW32(g + 24, (uint64_t)h->stencilStoreOp);
+    VKW32(g + 28, (uint64_t)h->initialLayout);
+    VKW32(g + 32, (uint64_t)h->finalLayout);
+}
 void cin_VkBindBufferMemoryInfo(VkArena *a, uint32_t g, VkBindBufferMemoryInfo *h)
 {
     (void)a; memset(h, 0, sizeof *h);
@@ -494,7 +519,7 @@ void cin_VkImageCreateInfo(VkArena *a, uint32_t g, VkImageCreateInfo *h)
     h->pNext = (void *)cin_chain(a, VKR32(g + 4));
     h->flags = (VkImageCreateFlags)VKR32(g + 8);
     h->imageType = (VkImageType)VKR32(g + 12);
-    h->format = (VkFormat)VKR32(g + 16);
+    h->format = vk_fix_format((VkFormat)VKR32(g + 16));
     memcpy(&h->extent, G_MEM + g + 20, sizeof h->extent);
     h->mipLevels = (uint32_t)VKR32(g + 32);
     h->arrayLayers = (uint32_t)VKR32(g + 36);
@@ -584,7 +609,7 @@ void cin_VkImageViewCreateInfo(VkArena *a, uint32_t g, VkImageViewCreateInfo *h)
     h->flags = (VkImageViewCreateFlags)VKR32(g + 8);
     h->image = (VkImage)VKR64(g + 16);
     h->viewType = (VkImageViewType)VKR32(g + 24);
-    h->format = (VkFormat)VKR32(g + 28);
+    h->format = vk_fix_format((VkFormat)VKR32(g + 28));
     memcpy(&h->components, G_MEM + g + 32, sizeof h->components);
     memcpy(&h->subresourceRange, G_MEM + g + 48, sizeof h->subresourceRange);
 }
@@ -1216,7 +1241,7 @@ void cin_VkRenderPassCreateInfo(VkArena *a, uint32_t g, VkRenderPassCreateInfo *
     h->pNext = (void *)cin_chain(a, VKR32(g + 4));
     h->flags = (VkRenderPassCreateFlags)VKR32(g + 8);
     h->attachmentCount = (uint32_t)VKR32(g + 12);
-    h->pAttachments = (void *)VKPTR(VKR32(g + 16));
+    { uint32_t p = VKR32(g + 16); if (p) { VkAttachmentDescription *v = vk_arena(a, sizeof *v * (h->attachmentCount)); for (uint32_t k = 0; k < (h->attachmentCount); k++) cin_VkAttachmentDescription(a, p + 36 * k, &v[k]); h->pAttachments = v; } else h->pAttachments = 0; }
     h->subpassCount = (uint32_t)VKR32(g + 20);
     { uint32_t p = VKR32(g + 24); if (p) { VkSubpassDescription *v = vk_arena(a, sizeof *v * (h->subpassCount)); for (uint32_t k = 0; k < (h->subpassCount); k++) cin_VkSubpassDescription(a, p + 40 * k, &v[k]); h->pSubpasses = v; } else h->pSubpasses = 0; }
     h->dependencyCount = (uint32_t)VKR32(g + 28);
@@ -1380,7 +1405,7 @@ void cin_VkSwapchainCreateInfoKHR(VkArena *a, uint32_t g, VkSwapchainCreateInfoK
     h->flags = (VkSwapchainCreateFlagsKHR)VKR32(g + 8);
     h->surface = (VkSurfaceKHR)VKR64(g + 16);
     h->minImageCount = (uint32_t)VKR32(g + 24);
-    h->imageFormat = (VkFormat)VKR32(g + 28);
+    h->imageFormat = vk_fix_format((VkFormat)VKR32(g + 28));
     h->imageColorSpace = (VkColorSpaceKHR)VKR32(g + 32);
     memcpy(&h->imageExtent, G_MEM + g + 36, sizeof h->imageExtent);
     h->imageArrayLayers = (uint32_t)VKR32(g + 44);

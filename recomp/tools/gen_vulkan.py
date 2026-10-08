@@ -122,10 +122,11 @@ def main(xmlpath, cmdpath, out):
         size = (off + al - 1) // al * al
         layout_cache[t] = (size, al, offs); return layout_cache[t]
     blit_cache = {}
+    FORCE_CONVERT = {'VkAttachmentDescription'}           # same layout, but its format may need vk_fix_format
     def blittable(t):
         t = real(t)
         if t in blit_cache: return blit_cache[t]
-        ok = True
+        ok = t not in FORCE_CONVERT
         for m in types[t]['members']:
             if m.ptr or real(m.type) == 'size_t' or real(m.type) in DISPATCHABLE or real(m.type).startswith('PFN_') or real(m.type) in funcptrs: ok = False
             elif is_struct(m.type) and not blittable(m.type): ok = False
@@ -194,6 +195,7 @@ def main(xmlpath, cmdpath, out):
                     sz = scalar_of(rt)[0]
                     rd = {1: 'VKR8', 2: 'VKR16', 4: 'VKR32', 8: 'VKR64'}[sz]; wr = rd.replace('R', 'W')
                     if rt == 'float': cin.append('    memcpy(&%s, G_MEM + %s, 4);' % (f, at)); cout.append('    memcpy(G_MEM + %s, &%s, 4);' % (at, f))
+                    elif rt == 'VkFormat' and t != 'VkSurfaceFormatKHR': cin.append('    %s = vk_fix_format((VkFormat)VKR32(%s));' % (f, at)); cout.append('    VKW32(%s, (uint64_t)%s);' % (at, f))
                     else: cin.append('    %s = (%s)%s(%s);' % (f, rt, rd, at)); cout.append('    %s(%s, (uint64_t)%s);' % (wr, at, f))
                 continue
             # pointers
