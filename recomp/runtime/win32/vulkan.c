@@ -4,10 +4,14 @@
  *
  * Mapped memory. The guest can only address its own 4 GB, so a mapping must appear inside it:
  *  - placed (VK_EXT_map_memory_placed): the driver maps the allocation at a guest address we reserve. No copies.
+ *  - imported (VK_EXT_external_memory_host; expected on MoltenVK): host-visible allocations are made in guest pages
+ *    and imported, so the guest's memory is the device memory. No copies. An allocation whose memory type can't
+ *    import falls back to a shadow.
  *  - shadowed (no such extension, e.g. MoltenVK): the guest gets a copy; it is written to the device memory before
  *    every submission and at flushes, and read back at invalidations and, for host-cached memory (where the GPU's
  *    results are read), after the waits that make them visible.
- * Every allocation is mapped whole the first time and stays mapped until vkUnmapMemory or vkFreeMemory. */
+ * Every allocation is mapped whole the first time and stays mapped until vkUnmapMemory or vkFreeMemory.
+ * W32_VK_MAP=placed|import|shadow picks one (default: the first the device offers). */
 #include "vulkan_rt.h"
 #include <dlfcn.h>
 #include <sys/mman.h>
@@ -191,7 +195,7 @@ IMPL(vulkan_1, vkCreateDebugUtilsMessengerEXT) { RET(VK_ERROR_EXTENSION_NOT_PRES
 IMPL(vulkan_1, vkDestroyDebugUtilsMessengerEXT) { RET(0, 4); }
 
 /* ---- device ---- */
-typedef struct DevInfo { VkDevice dev; VkPhysicalDevice pd; int placed; VkDeviceSize place_align; VkPhysicalDeviceMemoryProperties mem; } DevInfo;
+typedef struct DevInfo { VkDevice dev; VkPhysicalDevice pd; int placed, import; VkDeviceSize place_align, import_align; VkPhysicalDeviceMemoryProperties mem; } DevInfo;
 static DevInfo devs[8]; static int ndevs;
 static DevInfo *dev_info(VkDevice d) { for (int k = 0; k < ndevs; k++) if (devs[k].dev == d) return &devs[k]; return 0; }
 IMPL(vulkan_1, vkEnumerateDeviceExtensionProperties)                   /* (pd, layer, uint32_t *count, VkExtensionProperties *) */
@@ -229,7 +233,8 @@ IMPL(vulkan_1, vkCreateDevice)                                          /* (pd, 
         ci.pEnabledFeatures = &fix;
     }
     /* mappings inside the guest's address space */
-    int placed = !getenv("W32_VK_SHADOW") && dev_has_ext(pd, "VK_EXT_map_memory_placed") && dev_has_ext(pd, "VK_KHR_map_memory2") && vkp.vkGetPhysicalDeviceFeatures2;
+    const char *mode = getenv("W32_VK_MAP"); if (!mode && getenv("W32_VK_SHADOW")) mode = "shadow";
+    int placed = (!mode || !strcmp(mode, "placed")) && dev_has_ext(pd, "VK_EXT_map_memory_placed") && dev_has_ext(pd, "VK_KHR_map_memory2") && vkp.vkGetPhysicalDeviceFeatures2;
     VkPhysicalDeviceMapMemoryPlacedFeaturesEXT pf = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAP_MEMORY_PLACED_FEATURES_EXT};
     if (placed) {
         VkPhysicalDeviceFeatures2 f2 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &pf}; vkp.vkGetPhysicalDeviceFeatures2(pd, &f2);
@@ -240,19 +245,26 @@ IMPL(vulkan_1, vkCreateDevice)                                          /* (pd, 
         ext[n++] = "VK_EXT_map_memory_placed";
         pf.pNext = (void *)ci.pNext; pf.memoryMapRangePlaced = VK_FALSE; ci.pNext = &pf;
     }
+    int import = !placed && (!mode || !strcmp(mode, "import")) && dev_has_ext(pd, "VK_EXT_external_memory_host") && vkp.vkGetPhysicalDeviceProperties2;
+    if (import) { if (!has_name(ext, n, "VK_KHR_external_memory")) ext[n++] = "VK_KHR_external_memory"; ext[n++] = "VK_EXT_external_memory_host"; }
     ci.ppEnabledExtensionNames = ext; ci.enabledExtensionCount = n; ci.enabledLayerCount = 0; ci.ppEnabledLayerNames = 0;
     VkDevice d = 0; VkResult r = vkp.vkCreateDevice(pd, &ci, 0, &d);
     vk_arena_free(&a);
     VK_TRACE("vkCreateDevice", r);
     if (r == VK_SUCCESS && ndevs < 8) {
-        DevInfo *di = &devs[ndevs++]; di->dev = d; di->pd = pd; di->placed = placed; di->place_align = 4096;
+        DevInfo *di = &devs[ndevs++]; di->dev = d; di->pd = pd; di->placed = placed; di->place_align = 4096; di->import = import; di->import_align = 4096;
+        if (import) {
+            VkPhysicalDeviceExternalMemoryHostPropertiesEXT hp = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT};
+            VkPhysicalDeviceProperties2 p2 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &hp}; vkp.vkGetPhysicalDeviceProperties2(pd, &p2);
+            if (hp.minImportedHostPointerAlignment) di->import_align = hp.minImportedHostPointerAlignment;
+        }
         vkp.vkGetPhysicalDeviceMemoryProperties(pd, &di->mem);
         if (placed) {
             VkPhysicalDeviceMapMemoryPlacedPropertiesEXT pp = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAP_MEMORY_PLACED_PROPERTIES_EXT};
             VkPhysicalDeviceProperties2 p2 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &pp}; vkp.vkGetPhysicalDeviceProperties2(pd, &p2);
             if (pp.minPlacedMemoryMapAlignment) di->place_align = pp.minPlacedMemoryMapAlignment;
         }
-        fprintf(stderr, "vulkan: device ready; mapped memory %s\n", placed ? "placed in guest memory" : "shadowed");
+        fprintf(stderr, "vulkan: device ready; mapped memory %s\n", placed ? "placed in guest memory" : import ? "imported from guest memory" : "shadowed");
         rt_w32(G_MEM, ARG(3), vkh_guest(d));
     }
     RET(r, 4);
@@ -293,11 +305,36 @@ IMPL(vulkan_1, vkAllocateMemory)                                        /* (devi
     static int checked;                                /* the guest layout, once: allocationSize at +8, type at +16 */
     if (!checked++ && vk_trace) fprintf(stderr, "vulkan: VkMemoryAllocateInfo size %llu type %u (guest dwords %08x %08x %08x %08x)\n",
         (unsigned long long)ai.allocationSize, ai.memoryTypeIndex, VKR32(ARG(1) + 8), VKR32(ARG(1) + 12), VKR32(ARG(1) + 16), VKR32(ARG(1) + 20));
+    /* imported: host-visible memory is made in guest pages (whole 64 KB granules, aligned for the import) */
+    DevInfo *di = dev_info(d); uint32_t g = 0, gsize = 0;
+    VkImportMemoryHostPointerInfoEXT imp = {VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT, 0, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT};
+    if (di && di->import && ai.memoryTypeIndex < di->mem.memoryTypeCount && (di->mem.memoryTypes[ai.memoryTypeIndex].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) && ai.allocationSize < 0x40000000u) {
+        VkDeviceSize al = di->import_align > 65536 ? di->import_align : 65536;
+        gsize = (uint32_t)((ai.allocationSize + al - 1) / al * al); g = vm_alloc(0, gsize, 0x3000, 4);
+        VkMemoryHostPointerPropertiesEXT hp = {VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
+        int ok = g && (g % di->import_align) == 0 && vkp.vkGetMemoryHostPointerPropertiesEXT(d, imp.handleType, G_MEM + g, &hp) == VK_SUCCESS;
+        if (ok && !(hp.memoryTypeBits >> ai.memoryTypeIndex & 1)) {     /* another host-visible coherent type that can import */
+            uint32_t want = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | (di->mem.memoryTypes[ai.memoryTypeIndex].propertyFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+            for (uint32_t k = 0; k < di->mem.memoryTypeCount; k++)
+                if ((hp.memoryTypeBits >> k & 1) && (di->mem.memoryTypes[k].propertyFlags & want) == want) {
+                    if (vk_trace) fprintf(stderr, "vulkan: memory type %u -> %u to import guest memory\n", ai.memoryTypeIndex, k);
+                    ai.memoryTypeIndex = k; break;
+                }
+        }
+        if (ok && (hp.memoryTypeBits >> ai.memoryTypeIndex & 1)) {
+            imp.pHostPointer = G_MEM + g; imp.pNext = ai.pNext; ai.pNext = &imp; ai.allocationSize = gsize;
+        } else {
+            static int once; if (!once++) fprintf(stderr, "vulkan: memory type %u can't import guest memory (types %#x): shadowed\n", ai.memoryTypeIndex, hp.memoryTypeBits);
+            if (g) vm_free(g, 0, 0x8000); g = 0;
+        }
+    }
     VkDeviceMemory m = 0; VkResult r = vkp.vkAllocateMemory(d, &ai, 0, &m);
     vk_arena_free(&a);
+    if (r != VK_SUCCESS && g) { vm_free(g, 0, 0x8000); g = 0; }
     if (r == VK_SUCCESS) {
         pthread_mutex_lock(&mem_m);
-        Mem *e = mem_find(0); if (e) { memset(e, 0, sizeof *e); e->m = m; e->dev = d; e->size = ai.allocationSize; e->type = ai.memoryTypeIndex; }
+        Mem *e = mem_find(0); if (e) { memset(e, 0, sizeof *e); e->m = m; e->dev = d; e->size = ai.allocationSize; e->type = ai.memoryTypeIndex;
+                                       if (g) { e->guest = g; e->gsize = gsize; e->placed = 2; } }
         pthread_mutex_unlock(&mem_m);
         if (!e) fprintf(stderr, "vulkan: too many allocations to track\n");
         rt_w64(G_MEM, ARG(3), (uint64_t)m);
@@ -306,7 +343,7 @@ IMPL(vulkan_1, vkAllocateMemory)                                        /* (devi
 }
 static void unmap(Mem *e)                                              /* mem_m held */
 {
-    if (!e->guest) return;
+    if (!e->guest || e->placed == 2) return;                           /* imported: the guest pages are the memory */
     if (e->placed) {
         VkMemoryUnmapInfoKHR ui = {VK_STRUCTURE_TYPE_MEMORY_UNMAP_INFO_KHR, 0, VK_MEMORY_UNMAP_RESERVE_BIT_EXT, e->m};
         vkp.vkUnmapMemory2KHR(e->dev, &ui);
@@ -320,8 +357,10 @@ static void unmap(Mem *e)                                              /* mem_m 
 IMPL(vulkan_1, vkFreeMemory)                                            /* (device, memory (2), allocator) */
 {
     VkDeviceMemory m = (VkDeviceMemory)((uint64_t)ARG(1) | (uint64_t)ARG(2) << 32);
-    pthread_mutex_lock(&mem_m); Mem *e = m ? mem_find(m) : 0; if (e) { unmap(e); e->m = 0; } pthread_mutex_unlock(&mem_m);
+    uint32_t imported = 0;
+    pthread_mutex_lock(&mem_m); Mem *e = m ? mem_find(m) : 0; if (e) { if (e->placed == 2) imported = e->guest; unmap(e); e->m = 0; e->guest = 0; } pthread_mutex_unlock(&mem_m);
     if (m) vkp.vkFreeMemory(vkh_host(ARG(0)), m, 0);
+    if (imported) vm_free(imported, 0, 0x8000);                        /* after the device has let go of it */
     RET(0, 4);
 }
 IMPL(vulkan_1, vkMapMemory)                                             /* (device, memory (2), offset (2), size (2), flags, void **) */
@@ -366,9 +405,11 @@ IMPL(vulkan_1, vkUnmapMemory)                                           /* (devi
 static void shadow_out(void)
 {
     if (!nmapped_shadow) return;
+    static uint64_t bytes, calls; uint64_t now = 0;
     pthread_mutex_lock(&mem_m);
-    for (int k = 0; k < NMEM; k++) if (mems[k].guest && !mems[k].placed) memcpy(mems[k].host, G_MEM + mems[k].guest, (size_t)mems[k].size);
+    for (int k = 0; k < NMEM; k++) if (mems[k].guest && !mems[k].placed) { memcpy(mems[k].host, G_MEM + mems[k].guest, (size_t)mems[k].size); now += mems[k].size; }
     pthread_mutex_unlock(&mem_m);
+    bytes += now; if (vk_trace && ++calls % 300 == 0) fprintf(stderr, "vulkan: shadow copies %.1f MB per submission (%d mappings)\n", bytes / 300.0 / 1048576, nmapped_shadow), bytes = 0;
 }
 static void shadow_in(void)
 {
