@@ -192,7 +192,7 @@ static void type_text(const char *text) {
 }
 
 typedef struct { uint32_t frame; double at; char kind[8]; int x, y, phase; char path[512]; } Act;   // at > 0: seconds from start
-static Act acts[256]; static int nacts;
+static Act acts[4096]; static int nacts;
           // virtual cursor in game (display mode) pixels
 static void post(uint32_t msg, uint32_t wp, uint32_t lp);
 static void rel_motion(double gx, double gy);   /* relative motion in game pixels, the real-input path */
@@ -201,7 +201,7 @@ static void parse_script(void)
 {
     const char *e = getenv("DS_SCRIPT"); if (!e) return;
     char *s = strdup(e), *save, *tok = strtok_r(s, ";", &save);
-    while (tok && nacts < 256) {
+    while (tok && nacts < 4096) {
         Act *a = &acts[nacts]; char kind[8] = "", rest[600] = "";
         int ok = tok[0] == '@' ? sscanf(tok + 1, "%lf:%7[a-z]:%599[^\n]", &a->at, kind, rest) : sscanf(tok, "%u:%7[a-z]:%599[^\n]", &a->frame, kind, rest);
         if (tok[0] == '@') a->frame = 0xffffffffu;
@@ -236,7 +236,7 @@ static void cmdfile_poll(uint32_t fno)
     if (!path || fno % 15) return;
     FILE *f = fopen(path, "r"); if (!f) return;
     fseeko(f, pos, SEEK_SET); char line[700];
-    while (nacts < 256 && fgets(line, sizeof line, f)) {
+    while (nacts < 4096 && fgets(line, sizeof line, f)) {
         size_t l = strlen(line); if (!l || line[l - 1] != '\n') break;       /* a line still being written */
         pos += (off_t)l; line[l - 1] = 0;
         Act *a = &acts[nacts]; char kind[8] = "", rest[600] = "";
@@ -446,7 +446,7 @@ int main(int argc,char **argv) {
   if(!events()) break; w32_crash_heartbeat(2);
   if(stop>0 && (ds_clock_ns()-start)/1e9>=stop) break;
   uint32_t f=__atomic_load_n(&sims_frames,__ATOMIC_ACQUIRE);
-  while(frames!=f) { frames++; if(test_mode) { const char *shot=script_tick(frames); (void)shot; } }   /* every frame: steps wait for exact ones */
+  while(frames!=f) { frames++; if(test_mode) { const char *shot=script_tick(frames); extern char w32_vk_shot_req[1024]; if(shot) snprintf(w32_vk_shot_req,sizeof w32_vk_shot_req,"%s",shot); } }   /* every frame: steps wait for exact ones */
   SDL_WaitEventTimeout(NULL,2);
  }
 #else
