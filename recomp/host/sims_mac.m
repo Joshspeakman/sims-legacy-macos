@@ -372,6 +372,9 @@ int main(int argc, char **argv)
         }
         if (w32_prepare(exe, game, drive_c, overlay)) { fprintf(stderr, "SimsNative: cannot load %s\n", exe); return 1; }
         [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *tm) { (void)tm; w32_crash_heartbeat(2); }];   /* UI thread alive */
+        if (getenv("DS_EXIT_AFTER") && atof(getenv("DS_EXIT_AFTER")) > 0)                              /* tests: stop after so many seconds */
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(atof(getenv("DS_EXIT_AFTER")) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                fprintf(stderr, "host: %u frames presented\n", frames); _exit(0); });
 
         pthread_attr_t a; pthread_t t;
         pthread_attr_init(&a); pthread_attr_set_qos_class_np(&a, QOS_CLASS_USER_INTERACTIVE, 0);
