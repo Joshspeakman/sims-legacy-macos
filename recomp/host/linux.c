@@ -336,6 +336,12 @@ static int events(void) {
   key_event(keymap(e.key.keysym.scancode),e.type==SDL_KEYDOWN,e.key.repeat); break;
  case SDL_TEXTINPUT: for(const unsigned char *p=(unsigned char *)e.text.text;*p;p++) if(*p<128) post(0x102,*p,1); break;
  case SDL_MOUSEMOTION: {
+#ifdef SIMS_EDITION
+  { /* the system cursor, in the window's coordinates scaled to the game's screen (its window covers it) */
+   int ww,hh; SDL_GetWindowSize(window,&ww,&hh); if(ww<1||hh<1) break;
+   int x=(int)(e.motion.x*(double)w32_screen_w/ww), y=(int)(e.motion.y*(double)w32_screen_h/hh);
+   vcur_x=x; vcur_y=y; w32_set_cursor(x,y); post(0x200,mk(),pos_lp()); break; }
+#endif
   uint32_t w,h; dsr_mode_size(&w,&h); int ww,hh; SDL_GetWindowSize(window,&ww,&hh);
   double scale=fmax(w/(double)ww,h/(double)hh); rel_motion(e.motion.xrel*scale,e.motion.yrel*scale); w32_di_mouse_move(e.motion.xrel,e.motion.yrel); break;
  }
@@ -440,7 +446,7 @@ int main(int argc,char **argv) {
   if(!events()) break; w32_crash_heartbeat(2);
   if(stop>0 && (ds_clock_ns()-start)/1e9>=stop) break;
   uint32_t f=__atomic_load_n(&sims_frames,__ATOMIC_ACQUIRE);
-  if(f!=frames) { frames=f; if(test_mode) { const char *shot=script_tick(frames); (void)shot; } }
+  while(frames!=f) { frames++; if(test_mode) { const char *shot=script_tick(frames); (void)shot; } }   /* every frame: steps wait for exact ones */
   SDL_WaitEventTimeout(NULL,2);
  }
 #else
