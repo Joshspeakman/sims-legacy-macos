@@ -394,3 +394,131 @@ IMPL(gdi32, MoveToEx) { if (ARG(3)) { rt_w32(G_MEM, ARG(3), 0); rt_w32(G_MEM, AR
 IMPL(gdi32, LineTo) { RET(1, 3); }
 IMPL(gdi32, Ellipse) { RET(1, 5); }
 IMPL(gdi32, GetBkColor) { RET(0xffffff, 1); }
+/* EnumSystemLocalesW(callback(LPWSTR locale id), flags): one locale, US English ("00000409") */
+IMPL(kernel32, EnumSystemLocalesW)
+{
+    uint32_t s = scratch(32); const char *id = "00000409";
+    for (int k = 0; k < 9; k++) rt_w16(G_MEM, s + 2 * (uint32_t)k, (uint8_t)id[k]);
+    uint32_t a[1] = {s}; w32_callback(c, ARG(0), 1, a); unscratch(s);
+    RET(1, 2);
+}
+/* GetModuleHandleExW(flags, name or address, HMODULE *): flag 4 (FROM_ADDRESS) asks which image holds an address */
+IMPL(kernel32, GetModuleHandleExW)
+{
+    uint32_t flags = ARG(0), n = ARG(1), out = ARG(2), h = 0;
+    extern const struct rt_image { const char *name; uint32_t base, imp_first, imp_count; } rt_images[]; extern const unsigned rt_images_n;
+    if (flags & 4) {
+        if (n >= w32_image_base && n < w32_image_base + w32_image_size) h = w32_image_base;
+        for (unsigned k = 1; k < rt_images_n && !h; k++) {
+            uint32_t b = rt_images[k].base; if (n < b || rt_r16(G_MEM, b) != 0x5a4d) continue;
+            uint32_t pe = rt_r32(G_MEM, b + 0x3c), size = rt_r32(G_MEM, b + pe + 24 + 56);
+            if (n < b + size) h = b;
+        }
+    } else if (!n) h = w32_image_base;
+    else {
+        uint32_t a = ansi_of(n), esp = c->esp; void imp_kernel32_GetModuleHandleA(Ctx *);
+        rt_w32(G_MEM, esp, rt_r32(G_MEM, esp)); c->esp -= 0;                  /* GetModuleHandleA(name): one argument */
+        uint32_t save = rt_r32(G_MEM, esp + 4); rt_w32(G_MEM, esp + 4, a);
+        imp_kernel32_GetModuleHandleA(c); h = c->eax; c->esp = esp; rt_w32(G_MEM, esp + 4, save); unscratch(a);
+    }
+    if (out) rt_w32(G_MEM, out, h);
+    if (!h) { w32_set_last_error(c, 126); RET(0, 3); }
+    RET(1, 3);
+}
+/* SearchPathA(path, file, extension, cap, buffer, file part): the given path, else the game's folder */
+IMPL(kernel32, SearchPathA)
+{
+    const char *dir = ARG(0) ? GS(ARG(0)) : "C:\\GOG Games\\Dungeon Siege", *file = GS(ARG(1)), *ext = ARG(2) ? GS(ARG(2)) : "";
+    char win[1024], host[2048]; struct stat st;
+    if (strchr(file, '\\') || strchr(file, ':')) snprintf(win, sizeof win, "%s", file);
+    else snprintf(win, sizeof win, "%s\\%s%s", dir, file, strchr(file, '.') ? "" : ext);
+    if (w32_host_path(win, host, sizeof host, 0) || stat(host, &st)) { w32_set_last_error(c, 2); RET(0, 6); }
+    uint32_t n = (uint32_t)strlen(win), cap = ARG(3), buf = ARG(4);
+    if (n + 1 > cap) RET(n + 1, 6);
+    memcpy(GP(buf), win, n + 1);
+    if (ARG(5)) { const char *b = strrchr(win, '\\'); rt_w32(G_MEM, ARG(5), buf + (uint32_t)(b ? b + 1 - win : 0)); }
+    RET(n, 6);
+}
+
+/* ---- winmm: multimedia timers. Each runs on a runtime service thread that sleeps out its period and calls the
+ * guest's callback (uTimerID, uMsg, dwUser, 0, 0), or sets/pulses the event handle it was given ---- */
+int w32_spawn_service(void (*fn)(Ctx *, void *), void *arg);
+typedef struct MmTimer { uint32_t id, delay, fn, user, flags; volatile int killed; } MmTimer;
+static MmTimer *mm_timers[64];
+static void mm_timer_run(Ctx *c, void *arg)
+{
+    MmTimer *t = arg;
+    struct timespec next; clock_gettime(CLOCK_MONOTONIC, &next);
+    do {
+        uint64_t ns = (uint64_t)next.tv_nsec + (uint64_t)t->delay * 1000000u;
+        next.tv_sec += (time_t)(ns / 1000000000u); next.tv_nsec = (long)(ns % 1000000000u);
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, 0);
+        if (t->killed) break;
+        if (t->flags & 0x30) w32_event_signal(t->fn, 1);              /* TIME_CALLBACK_EVENT_SET / _PULSE */
+        else { uint32_t a[5] = {t->id, 0, t->user, 0, 0}; w32_callback(c, t->fn, 5, a); }
+    } while ((t->flags & 1) && !t->killed);                        /* TIME_PERIODIC */
+}
+IMPL(winmm, timeSetEvent)                                              /* (delay, resolution, callback, user, flags) */
+{
+    int k = 1; while (k < 64 && mm_timers[k]) k++;
+    if (k == 64) RET(0, 5);
+    MmTimer *t = calloc(1, sizeof *t); t->id = (uint32_t)k; t->delay = ARG(0) ? ARG(0) : 1; t->fn = ARG(2); t->user = ARG(3); t->flags = ARG(4);
+    mm_timers[k] = t;
+    if (w32_spawn_service(mm_timer_run, t)) { mm_timers[k] = 0; free(t); RET(0, 5); }
+    RET((uint32_t)k, 5);
+}
+IMPL(winmm, timeKillEvent)
+{
+    uint32_t k = ARG(0); if (k == 0 || k >= 64 || !mm_timers[k]) RET(97, 1);   /* MMSYSERR_INVALPARAM */
+    mm_timers[k]->killed = 1; mm_timers[k] = 0;                    /* the service thread lets go of it */
+    RET(0, 1);
+}
+
+/* ---- asynchronous procedure calls: QueueUserAPC to a thread, run when it next waits alertably (SleepEx) ---- */
+typedef struct Sync { pthread_mutex_t m; pthread_cond_t cv; int manual, signaled, count; uint32_t owner; char name[64]; int waiters, closed; } Sync;   /* as in threads.c */
+typedef struct ThreadObj { Sync s; uint32_t teb, tid, exit_code, suspended; pthread_t pt; } ThreadObj;
+typedef struct Apc { uint32_t teb, fn, data; } Apc;
+static Apc apcs[256]; static int napcs;
+static uint32_t teb_of_handle(Ctx *c, uint32_t h)
+{
+    if (h == 0xfffffffeu) return c->fs_base;
+    HObj *o = h_get(h, H_THREAD); return o ? ((ThreadObj *)o->p)->teb : 0;
+}
+IMPL(kernel32, QueueUserAPC)                                           /* (function, thread, data) */
+{
+    uint32_t teb = teb_of_handle(c, ARG(1)); if (!teb) { w32_set_last_error(c, 6); RET(0, 3); }
+    pthread_mutex_lock(&sync_m);
+    int ok = napcs < 256; if (ok) { apcs[napcs].teb = teb; apcs[napcs].fn = ARG(0); apcs[napcs].data = ARG(2); napcs++; pthread_cond_broadcast(&sync_cv); }
+    pthread_mutex_unlock(&sync_m);
+    RET(ok, 3);
+}
+/* runs this thread's queued APCs (sync_m held on entry, released on return); returns how many ran */
+static int run_apcs(Ctx *c)
+{
+    Apc mine[256]; int n = 0;
+    for (int k = 0; k < napcs; ) if (apcs[k].teb == c->fs_base) { mine[n++] = apcs[k]; apcs[k] = apcs[--napcs]; } else k++;
+    pthread_mutex_unlock(&sync_m);
+    for (int k = 0; k < n; k++) { uint32_t a[1] = {mine[k].data}; w32_callback(c, mine[k].fn, 1, a); }
+    return n;
+}
+static int has_apc(uint32_t teb) { for (int k = 0; k < napcs; k++) if (apcs[k].teb == teb) return 1; return 0; }
+IMPL(kernel32, SleepEx)                                                /* (ms, alertable): WAIT_IO_COMPLETION when APCs ran */
+{
+    uint32_t ms = ARG(0);
+    if (!ARG(1)) { void imp_kernel32_Sleep(Ctx *); uint32_t esp = c->esp; imp_kernel32_Sleep(c); c->esp = esp + 12; c->eax = 0; return; }
+    struct timespec until; clock_gettime(CLOCK_REALTIME, &until);
+    if (ms != 0xffffffffu) { until.tv_sec += ms / 1000; until.tv_nsec += (long)(ms % 1000) * 1000000; if (until.tv_nsec >= 1000000000) { until.tv_sec++; until.tv_nsec -= 1000000000; } }
+    pthread_mutex_lock(&sync_m);
+    while (!has_apc(c->fs_base)) {
+        if (ms == 0xffffffffu) pthread_cond_wait(&sync_cv, &sync_m);
+        else if (!ms || pthread_cond_timedwait(&sync_cv, &sync_m, &until)) break;
+    }
+    if (has_apc(c->fs_base)) { run_apcs(c); RET(0xc0, 2); }
+    pthread_mutex_unlock(&sync_m);
+    RET(0, 2);
+}
+IMPL(kernel32, FreeLibraryAndExitThread)                               /* (module, code): modules stay loaded */
+{
+    rt_w32(G_MEM, c->esp + 4, ARG(1)); void imp_kernel32_ExitThread(Ctx *); imp_kernel32_ExitThread(c);
+}
+IMPL(kernel32, _lclose) { void imp_kernel32_CloseHandle(Ctx *); imp_kernel32_CloseHandle(c); c->eax = c->eax ? 0 : 0xffffffffu; }   /* HFILE_ERROR */

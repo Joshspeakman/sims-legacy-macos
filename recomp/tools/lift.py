@@ -624,6 +624,26 @@ class Lifter:
             return ('{ uint32_t ea = %s, src = %s, exp = eax, old = exp; '
                     '(void)__atomic_compare_exchange_n((uint32_t *)(M + ea), &old, src, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); '
                     'LF(LF_SUB, %d, exp, old, exp - old); eax = old; }') % (self.addr(i, o[0]), self.rd(i, o[1]), SZ[4])
+        if mn == 'cmpxchg8b' and o[0].type == X.X86_OP_MEM:
+            # compare edx:eax with [ea]: equal -> [ea] = ecx:ebx, ZF set; not equal -> edx:eax = [ea], ZF clear
+            return ('{ uint32_t ea = %s; uint64_t exp = (uint64_t)edx << 32 | eax, old = exp; '
+                    'int ok = __atomic_compare_exchange_n((uint64_t *)(M + ea), &old, (uint64_t)ecx << 32 | ebx, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); '
+                    'flags_set(&f, ok ? F_ZF : 0, F_ZF); if (!ok) { eax = (uint32_t)old; edx = (uint32_t)(old >> 32); } }') % self.addr(i, o[0])
+        if mn == 'xadd' and o[0].type == X.X86_OP_MEM and o[0].size == 4 and o[1].type == X.X86_OP_REG:
+            return ('{ uint32_t ea = %s, src = %s; uint32_t old = __atomic_fetch_add((uint32_t *)(M + ea), src, __ATOMIC_SEQ_CST); '
+                    'LF(LF_ADD, %d, old, src, old + src); %s }') % (self.addr(i, o[0]), self.rd(i, o[1]), SZ[4], self.wr(i, o[1], 'old'))
+        if mn in ('add', 'sub', 'and', 'or', 'xor') and o[0].type == X.X86_OP_MEM and o[0].size in (1, 2, 4):
+            sz = o[0].size; t = {1: 'uint8_t', 2: 'uint16_t', 4: 'uint32_t'}[sz]
+            fn = {'add': '__atomic_fetch_add', 'sub': '__atomic_fetch_sub', 'and': '__atomic_fetch_and', 'or': '__atomic_fetch_or', 'xor': '__atomic_fetch_xor'}[mn]
+            op = {'add': '+', 'sub': '-', 'and': '&', 'or': '|', 'xor': '^'}[mn]
+            lf = {'add': 'LF_ADD', 'sub': 'LF_SUB'}.get(mn, 'LF_LOGIC')
+            return ('{ uint32_t ea = %s; %s src = (%s)(%s); uint32_t old = %s((%s *)(M + ea), src, __ATOMIC_SEQ_CST); '
+                    'LF(%s, %s, old, src, (old %s src) & %s); }') % (self.addr(i, o[0]), t, t, self.rd(i, o[1]), fn, t, lf, SZ[sz], op, MASK[sz])
+        if mn in ('bts', 'btr') and o[0].type == X.X86_OP_MEM and o[0].size == 4 and o[1].type == X.X86_OP_IMM:
+            bit = o[1].imm & 31; fn = '__atomic_fetch_or' if mn == 'bts' else '__atomic_fetch_and'
+            v = '(1u << %d)' % bit if mn == 'bts' else '~(1u << %d)' % bit
+            return ('{ uint32_t ea = %s; uint32_t old = %s((uint32_t *)(M + ea), %s, __ATOMIC_SEQ_CST); '
+                    'flags_set(&f, (old >> %d) & 1u ? F_CF : 0, F_CF); }') % (self.addr(i, o[0]), fn, v, bit)
         raise Unsupported('lock ' + mn)
 
     def string(self, mn, rep):

@@ -34,12 +34,12 @@ for f in "$HERE/runtime/rt.c" "$HERE"/runtime/win32/*.c "$OUT/imptab.c"; do
     o="$OUT/obj/rt/$(basename "$f" .c).o"
     OPT=-O1; [[ $(basename "$f") == native.c ]] && OPT=-O3
     "$CC" "${COMPAT_FLAGS[@]}" "${EDITION_FLAGS[@]}" -c "$OPT" -g -fPIC -D_GNU_SOURCE -ffp-contract=off -fno-strict-aliasing -Wall -Wno-unused-function \
-        -I "$HERE/runtime" -I "$HERE/runtime/win32" -I "$HERE/third_party/mojoshader" -I "$HERE/third_party/minimp3" "${CFLAGS[@]}" -o "$o" "$f"
+        -I "$HERE/runtime" -I "$HERE/runtime/win32" -I "$HERE/third_party/mojoshader" -I "$HERE/third_party/minimp3" -I "$HERE/third_party/vulkan/include" "${CFLAGS[@]}" -o "$o" "$f"
 done
 "$CC" -shared -o "$OUT/libgame.so" "$OUT"/obj/*.o "$OUT"/obj/rt/*.o "$OUT"/obj/rt/mojo/*.o "${LIBS[@]}" -pthread -ldl -lm -lz
 if [[ -f "$HERE/host/linux.c" ]]; then
     "$CC" "${COMPAT_FLAGS[@]}" "${EDITION_FLAGS[@]}" -O2 -g -D_GNU_SOURCE -DDS_BUILD=\"$(git -C "$ROOT" describe --always --dirty)\" \
-        -I "$HERE/runtime" "${CFLAGS[@]}" -o "$OUT/app/$APP" \
+        -I "$HERE/runtime" -I "$HERE/third_party/vulkan/include" "${CFLAGS[@]}" -o "$OUT/app/$APP" \
         "$HERE/host/linux.c" "$ROOT/src/renderer/linux/renderer.c" \
         -Wl,--export-dynamic "$OUT"/obj/*.o "$OUT"/obj/rt/*.o "$OUT"/obj/rt/mojo/*.o "${LIBS[@]}" -pthread -ldl -lm -lz
     cp "$ROOT/src/renderer/linux/"*.glsl "$ROOT/src/dsr/dsr_snapshot.bin" "$OUT/app/"

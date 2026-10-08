@@ -65,8 +65,15 @@ IMPL(kernel32, OpenFile)
     int ok = !w32_host_path(name, host, sizeof host, 0) && access(host, F_OK) == 0;
     if (of) { memset(GP(of), 0, 136); G_MEM[of] = 136; snprintf((char *)GP(of + 8), 128, "%s", name); }
     if (style & 0x4000) RET(ok ? 1 : 0xffffffffu, 3);                               /* OF_EXIST */
-    fprintf(stderr, "w32: OpenFile(%s, %#x) not supported\n", name, style);
-    RET(0xffffffffu, 3);
+    if (style & 0x0300) { fprintf(stderr, "w32: OpenFile(%s, %#x) not supported\n", name, style); RET(0xffffffffu, 3); }
+    /* OF_READ / OF_WRITE / OF_READWRITE, OF_CREATE: CreateFileA(name, access, share, 0, disposition, normal, 0) on a
+     * frame built below ours (4 more arguments); the HFILE is the file handle */
+    uint32_t access = (style & 3) == 1 ? 0x40000000u : (style & 3) == 2 ? 0xc0000000u : 0x80000000u;
+    uint32_t share = (style & 0x70) == 0x10 ? 0 : (style & 0x70) == 0x20 ? 1 : (style & 0x70) == 0x30 ? 2 : 3;
+    uint32_t esp0 = c->esp, ret = rt_r32(G_MEM, esp0), a[7] = {ARG(0), access, share, 0, (style & 0x1000) ? 2u : 3u, 0x80, 0};
+    c->esp = esp0 - 16; rt_w32(G_MEM, c->esp, ret); for (int k = 0; k < 7; k++) rt_w32(G_MEM, c->esp + 4 + 4 * (uint32_t)k, a[k]);
+    void imp_kernel32_CreateFileA(Ctx *); imp_kernel32_CreateFileA(c);
+    c->esp = esp0 + 16;
 }
 /* ---- USER32 ---- */
 IMPL(user32, GetTopWindow) { extern uint32_t w32_top_window(void); RET(ARG(0) ? 0 : w32_top_window(), 1); }
