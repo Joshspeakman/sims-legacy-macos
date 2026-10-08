@@ -176,6 +176,15 @@ static inline __attribute__((always_inline)) void flags_set(LFs *f, uint32_t v, 
 #define CC_LE (flag_zf(&f) || flag_sf(&f) != flag_of(&f))
 #define CC_G  (!flag_zf(&f) && flag_sf(&f) == flag_of(&f))
 
+/* lock cmpxchg8b: an 8-byte compare-exchange; arm64 faults on an unaligned 64-bit atomic, so those take a lock */
+int rt_cas64_unaligned(uint8_t *p, uint64_t *expected, uint64_t desired);
+static inline int rt_cas64(uint8_t *p, uint64_t *expected, uint64_t desired)
+{
+    if (__builtin_expect(((uintptr_t)p & 7) == 0, 1))
+        return __atomic_compare_exchange_n((uint64_t *)p, expected, desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+    return rt_cas64_unaligned(p, expected, desired);
+}
+
 /* ---- x87 (double model) ---- */
 #define ST(i)     (c->st[(c->top + (i)) & 7])
 #define FPUSH(v)  do { double _v = (v); c->top = (c->top - 1) & 7; c->st[c->top] = _v; } while (0)

@@ -627,7 +627,7 @@ class Lifter:
         if mn == 'cmpxchg8b' and o[0].type == X.X86_OP_MEM:
             # compare edx:eax with [ea]: equal -> [ea] = ecx:ebx, ZF set; not equal -> edx:eax = [ea], ZF clear
             return ('{ uint32_t ea = %s; uint64_t exp = (uint64_t)edx << 32 | eax, old = exp; '
-                    'int ok = __atomic_compare_exchange_n((uint64_t *)(M + ea), &old, (uint64_t)ecx << 32 | ebx, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); '
+                    'int ok = rt_cas64(M + ea, &old, (uint64_t)ecx << 32 | ebx); '
                     'flags_set(&f, ok ? F_ZF : 0, F_ZF); if (!ok) { eax = (uint32_t)old; edx = (uint32_t)(old >> 32); } }') % self.addr(i, o[0])
         if mn == 'xadd' and o[0].type == X.X86_OP_MEM and o[0].size == 4 and o[1].type == X.X86_OP_REG:
             return ('{ uint32_t ea = %s, src = %s; uint32_t old = __atomic_fetch_add((uint32_t *)(M + ea), src, __ATOMIC_SEQ_CST); '
@@ -803,6 +803,30 @@ def find_except_handler3(path):
     for m in re.finditer(rb'\x6a\xff\x68....\x68(....)\x64\xa1\x00\x00\x00\x00', d, re.S): c[struct.unpack('<I', m.group(1))[0]] += 1
     return c.most_common(1)[0][0] if c else 0
 
+def find_crashpad_init(L):
+    """The Sims: the function that sets up crashpad's annotations, found by the two strings it pushes ("minidump",
+    "binary_version"); 0x467020 in Steam build 17905164. runtime/win32/hooks.c answers it (SIMS_CRASHPAD_INIT)."""
+    import bisect
+    d = L.pe.data; funcs = sorted(L.funcs); found = []
+    for key in (b'minidump\0', b'binary_version\0'):
+        hits = set()
+        for m in re.finditer(re.escape(key), d):
+            if m.start() and d[m.start() - 1] != 0: continue
+            va = None
+            for n, sva, vs, ra, rs, fl in L.pe.sections:
+                if ra <= m.start() < ra + rs: va = sva + m.start() - ra
+            if va is None: continue
+            for r in re.finditer(re.escape(b'\x68' + struct.pack('<I', va)), d):
+                rva = None
+                for n, sva, vs, ra, rs, fl in L.pe.sections:
+                    if ra <= r.start() < ra + rs and fl & 0x20000000: rva = sva + r.start() - ra
+                if rva is not None:
+                    k = bisect.bisect_right(funcs, rva) - 1
+                    if k >= 0: hits.add(funcs[k])
+        found.append(hits)
+    both = found[0] & found[1]
+    return min(both) if len(both) == 1 else 0
+
 def find_except_handler4(path):
     """(_except_handler4, its __SEH_prolog4 helpers): each helper starts push _except_handler4; push fs:[0]. The Sims
     Legacy (MSVC 2022): 0x7af450, prologs 0x7a94e0 and 0x944940 (_GS)."""
@@ -834,7 +858,9 @@ def main():
         if edition in ('fnv', 'sims'):                            # Fallout: New Vegas, The Sims: none of the DS2 hooks apply
             L.hooks = {}; L.overrides = {}
         if edition == 'sims':
-            L.overrides = {0x467020: 'crash reporting (crashpad): not started'}
+            cp = find_crashpad_init(L)
+            if cp: L.overrides = {cp: 'crash reporting (crashpad): not started'}
+            else: print('warning: the crash-reporting set-up (minidump/binary_version) was not found; crashpad will stop the game')
         elif edition == 'broken-world':
             L.guest_flow = True
             L.hooks = dict(zip(PROFILES[edition]['hooks'], HOOKS.values()))

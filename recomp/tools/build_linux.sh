@@ -10,7 +10,8 @@ read -ra COMPAT_FLAGS < "$OUT/compiler-flags.txt"
 EXE=$OUT/DungeonSiege2.exe; APP=DungeonSiege2Linux
 [[ -f "$OUT/FalloutNV.exe" ]] && { EXE=$OUT/FalloutNV.exe; APP=FalloutNVLinux; }
 [[ -f "$OUT/Sims.exe" ]] && { EXE=$OUT/Sims.exe; APP=SimsLinux; }
-EDITION=$(PYTHONPATH="$HERE/tools" python3 -c 'import sys; from editions import identify; print(identify(sys.argv[1], prepared=True))' "$EXE")
+if [[ "$APP" == SimsLinux ]]; then EDITION=sims       # any Steam build build_sims.sh accepted
+else EDITION=$(PYTHONPATH="$HERE/tools" python3 -c 'import sys; from editions import identify; print(identify(sys.argv[1], prepared=True))' "$EXE"); fi
 EDITION_FLAGS=()
 [[ "$EDITION" == broken-world ]] && EDITION_FLAGS=(-DDS2_BROKEN_WORLD)
 [[ "$EDITION" == fnv ]] && EDITION_FLAGS=(-DFNV_EDITION)

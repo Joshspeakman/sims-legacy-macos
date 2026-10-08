@@ -9,7 +9,11 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 EXE="${1:?usage: build_sims.sh <Sims.exe> [outdir]}"; OUT="${2:-$HERE/work/sims}"
 SHA=b7c8765ed2383cbda8c047694d54a21d97895c8dae57dcc87716ca6e78b342e3          # Steam 3314060, build 17905164
 sha() { if command -v shasum >/dev/null; then shasum -a 256 "$1"; else sha256sum "$1"; fi | cut -d' ' -f1; }
-[ "$(sha "$EXE")" = "$SHA" ] || { echo "not the supported Steam Sims.exe (The Sims Legacy Collection, build 17905164)"; exit 1; }
+if [ "$(sha "$EXE")" != "$SHA" ]; then
+  # another Steam build: the port finds what it needs by pattern (SEH helpers, crash reporting), so it may well work
+  [ -n "${SIMS_ANY_BUILD:-}" ] || { echo "not the Steam Sims.exe this port was made with (build 17905164); SIMS_ANY_BUILD=1 tries it anyway"; exit 1; }
+  echo "warning: Sims.exe is not build 17905164 (SHA-256 $(sha "$EXE")): trying it (SIMS_ANY_BUILD)"
+fi
 PY="$HERE/.venv/bin/python"
 [ -x "$PY" ] || { python3 -m venv "$HERE/.venv" && "$HERE/.venv/bin/pip" install -q capstone==5.0.7 unicorn==2.1.4; }
 mkdir -p "$OUT"; OUT="$(cd "$OUT" && pwd)"
