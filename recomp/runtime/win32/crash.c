@@ -117,7 +117,7 @@ static const char *image_of(uint32_t a)
 {
     for (unsigned k = 0; k < rt_images_n; k++) {
         uint32_t b = rt_images[k].base, sz = k ? 0x01000000u : DS2_IMAGE_END - b;
-        if (a - b < sz) return *rt_images[k].name ? rt_images[k].name : "DungeonSiege.exe";
+        if (a - b < sz) return *rt_images[k].name ? rt_images[k].name : GAME_EXE;
     }
     return 0;
 }
@@ -213,7 +213,7 @@ const char *w32_crash_report(const char *kind, const char *reason, Ctx *c, uint3
     uint64_t now = now_ns();
     char when[64]; strftime(when, sizeof when, "%Y-%m-%d %H:%M:%S %Z", &tm);
     int hang = !strcmp(kind, "hang");
-    dprintf(fd, "Dungeon Siege Native - %s report\n%s\n\n", hang ? "not responding" : "crash", when);
+    dprintf(fd, DS2_TITLE " (native) - %s report\n%s\n\n", hang ? "not responding" : "crash", when);
     dprintf(fd, "WHAT HAPPENED\n  %s\n", reason);
     if (guest_pc) { char d[160]; describe_guest(d, sizeof d, guest_pc); dprintf(fd, "  where: %s\n", d); }
     dprintf(fd, "  %.0f s after launch; %llu frames presented (last %.1f s ago); messages last pumped %.1f s ago\n\n",
@@ -260,12 +260,12 @@ const char *w32_crash_report(const char *kind, const char *reason, Ctx *c, uint3
         write_calls(fd, t);
     }
     dprintf(fd, "\nLOADED GAME CODE\n");
-    for (unsigned k = 0; k < rt_images_n; k++) dprintf(fd, "  %08x  %s\n", rt_images[k].base, *rt_images[k].name ? rt_images[k].name : "DungeonSiege.exe");
+    for (unsigned k = 0; k < rt_images_n; k++) dprintf(fd, "  %08x  %s\n", rt_images[k].base, *rt_images[k].name ? rt_images[k].name : GAME_EXE);
 
     /* for developers: host addresses, to map onto exact x86 instructions with tools/symbolize-report.sh (atos) */
 #ifdef __APPLE__
     const struct mach_header *mh0 = 0; intptr_t slide = 0;
-    for (uint32_t i = 0; i < _dyld_image_count(); i++) if (strstr(_dyld_get_image_name(i), "DungeonSiegeNative")) { mh0 = _dyld_get_image_header(i); slide = _dyld_get_image_vmaddr_slide(i); break; }
+    mh0 = _dyld_get_image_header(0); slide = _dyld_get_image_vmaddr_slide(0);   /* the main executable, whatever its name */
     dprintf(fd, "\nHOST ADDRESSES (load address %p, slide %#lx)\n", (void *)mh0, (long)slide);
 #else
     Dl_info executable = {0}; dladdr((void *)w32_crash_report, &executable);
@@ -286,7 +286,7 @@ const char *w32_crash_report(const char *kind, const char *reason, Ctx *c, uint3
         }
     }
     close(fd);
-    fprintf(stderr, "DungeonSiegeNative: %s report written to %s\n", kind, last_report);
+    fprintf(stderr, "native: %s report written to %s\n", kind, last_report);
     last_written = now_ns(); writing = 0;
     return last_report;
 }
@@ -348,7 +348,7 @@ static void *watchdog(void *arg)
             if (fd >= 0) { dprintf(fd, "\nRECOVERED: the game responded again after about %.0f s.\n", secs); close(fd); }
             char np[1400]; const char *b = strrchr(hang_path, '/');
             if (b) { snprintf(np, sizeof np, "%.*s/hang-recovered-%s", (int)(b - hang_path), hang_path, b + 6); rename(hang_path, np); }
-            fprintf(stderr, "DungeonSiegeNative: the game responded again after %.0f s\n", secs);
+            fprintf(stderr, "native: the game responded again after %.0f s\n", secs);
             hang_since = 0;
         }
         double shown_age = beat[3] ? (now - beat[3]) / 1e9 : 0;     /* the game draws, but nothing reaches the screen */
@@ -370,11 +370,7 @@ void w32_crash_init(const char *data_dir, const char *build)
     snprintf(report_dir, sizeof report_dir, "%s/CrashReports", data_dir); mkdir(report_dir, 0755);
     if (getenv("DS_LOG_FILE")) snprintf(log_path, sizeof log_path, "%s", getenv("DS_LOG_FILE"));
     else {
-#ifdef __linux__
     snprintf(log_path, sizeof log_path, "%s/last-run.log", data_dir);
-#else
-    snprintf(log_path, sizeof log_path, "%s/DungeonSiegeNative.log", data_dir);
-#endif
     }
     snprintf(build_id, sizeof build_id, "%s", build ? build : "?");
     pthread_key_create(&tkey, on_thread_exit);

@@ -17,6 +17,8 @@
 #include <dlfcn.h>
 #include <pthread.h>
 #include <sys/stat.h>
+#include <unistd.h>
+#include <fcntl.h>
 #define VK_NO_PROTOTYPES
 #define VK_USE_PLATFORM_METAL_EXT
 #include <vulkan/vulkan.h>
@@ -132,6 +134,9 @@ static void key_event(uint16_t code, int down, int repeat)
 - (BOOL)acceptsFirstResponder { return YES; }
 - (BOOL)wantsUpdateLayer { return YES; }
 - (CALayer *)makeBackingLayer { return layer; }
+/* one pixel per point: AppKit sets a backing layer's contentsScale to the screen's (2 on Retina), and MoltenVK
+ * reports the surface as bounds x contentsScale; the game's frame is its screen size (w32_screen_w x h) */
+- (void)viewDidChangeBackingProperties { [super viewDidChangeBackingProperties]; layer.contentsScale = 1; }
 /* The Sims shows the system cursor and reads GetCursorPos: the pointer's place in the view, scaled to the game's
  * screen (its window covers it) */
 - (void)moved:(NSEvent *)e
@@ -165,6 +170,7 @@ static void key_event(uint16_t code, int down, int repeat)
     for (NSUInteger k = 0; k < s.length; k++) {
         unichar ch = [s characterAtIndex:k]; uint8_t b; uint16_t w = ch;
         if (ch >= 0xf700) continue;                                   // function keys
+        if (ch == 0x7f) { post(0x102, 8, 1); continue; }            // Backspace (the Mac's Delete key sends DEL)
         if (w32_wide_to_mb(1252, &w, 1, &b, 1) == 1) post(0x102, b, 1);
     }
 }
@@ -277,7 +283,13 @@ static void window_changed(uint32_t hwnd, int x, int y, int w, int h, int visibl
 @implementation AppDelegate
 - (void)applicationDidBecomeActive:(NSNotification *)n { (void)n; post(0x1c, 1, 0); }
 - (void)applicationDidResignActive:(NSNotification *)n { (void)n; post(0x1c, 0, 0); }
-- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)s { (void)s; return NSTerminateNow; }
+/* Cmd-Q: the game is asked to close its window (WM_CLOSE), as on Windows; it quits through its own path and
+ * game_thread ends the process. Before the game has a window: at once. */
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)s
+{
+    (void)s; if (!game_hwnd || !game_running) _exit(0);
+    post(0x10, 0, 0); return NSTerminateCancel;
+}
 @end
 
 static void show_report_alert(NSString *title, NSString *path)
@@ -330,13 +342,16 @@ int main(int argc, char **argv)
                           exe = strdup([bin stringByAppendingPathComponent:@"../Resources/Sims.exe"].UTF8String); }
         }
         if (!exe || !game || !data) { fprintf(stderr, "usage: SimsNative --exe <Sims.exe> --game <game folder> --data <data folder>\n"); return 1; }
-        if (log && !getenv("DS_TEST")) {                              // the app's log, in the data folder
-            NSString *lp = [NSString stringWithFormat:@"%s/%@.log", data, log]; mkdir(data, 0755);
-            freopen(lp.UTF8String, "a", stderr); setenv("DS_LOG_FILE", lp.UTF8String, 1);
-        }
         char drive_c[1024], overlay[1024];
         snprintf(drive_c, sizeof drive_c, "%s/drive_c", data); snprintf(overlay, sizeof overlay, "%s/game", data);
-        mkdir(data, 0755); mkdir(drive_c, 0755); mkdir(overlay, 0755);
+        NSFileManager *fm = NSFileManager.defaultManager;            // parents included (~/Games may not exist yet)
+        [fm createDirectoryAtPath:@(drive_c) withIntermediateDirectories:YES attributes:nil error:nil];
+        [fm createDirectoryAtPath:@(overlay) withIntermediateDirectories:YES attributes:nil error:nil];
+        if (log && !getenv("DS_TEST")) {                              // the app's log, in the data folder
+            NSString *lp = [NSString stringWithFormat:@"%s/%@.log", data, log];
+            int fd = open(lp.UTF8String, O_WRONLY | O_CREAT | O_APPEND, 0644);
+            if (fd >= 0) { dup2(fd, 2); close(fd); setenv("DS_LOG_FILE", lp.UTF8String, 1); }   // stderr kept if not
+        }
         test_mode = getenv("DS_TEST") && atoi(getenv("DS_TEST"));
         /* the game's screen: the display in points (the game sizes its frame and interface to it), the test window's
          * 1024x768 in test mode, or DS_RESOLUTION=WxH */

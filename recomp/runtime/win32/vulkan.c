@@ -504,6 +504,7 @@ IMPL(vulkan_1, vkQueuePresentKHR)                                       /* (queu
     VkResult r = vkp.vkQueuePresentKHR(q, &pi);
     if (sem) shot_save(s, frame, req);
     vk_arena_free(&a);
+    { void w32_crash_heartbeat(int); if (r >= 0) w32_crash_heartbeat(0); }   /* a frame (crash and hang reports count these) */
     if (r >= 0 && w32_host_vk_presented) w32_host_vk_presented();
     VK_TRACE("vkQueuePresentKHR", r); RET(r, 2);
 }
