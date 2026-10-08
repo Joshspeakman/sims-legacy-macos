@@ -21,6 +21,8 @@ Data: the first run copies `TemplateUserData` to `Saved Games\Electronic Arts\Th
 ## Where things are
 
 - `recomp/build_sims.sh`: verify, unwrap, analyse, lift (exe and DLLs), compile, link. `SIMS_RELINK=1` relinks only.
+- `recomp/tools/sims_iterate.sh`: relink and one test-mode run (`DATA=`, `T=`, `NOLINK=1`, `SIMS_GAME=`), log in
+  `recomp/work/run.log`. Use a fresh `DATA` folder after a run that crashed during the first-run copy.
 - `recomp/tools/steamstub.py`: SteamStub 3.1 x86 unwrapping (header at entry − 0xF0, XOR-chained; key, IV and
   "stolen" first ciphertext block in it). `cryptography` if installed, else `openssl enc`.
 - `recomp/tools/lift.py --game sims`: no DS2 hooks; the override at `0x467020` (crash reporting); SEH4 support
