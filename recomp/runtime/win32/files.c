@@ -181,6 +181,27 @@ IMPL(kernel32, GetFileAttributesA)
     if (getenv("W32_DIRLOG")) fprintf(stderr, "w32: GetFileAttributes(%s) -> %s\n", GS(ARG(0)), p);
     RET(S_ISDIR(st.st_mode) ? 0x10 : (st.st_mode & S_IWUSR) ? 0x20 : 0x21, 1);
 }
+static void ft_of(uint32_t at, time_t sec, long nsec)    /* Unix time -> FILETIME (100 ns since 1601) */
+{
+    uint64_t t = ((uint64_t)sec + 11644473600ull) * 10000000ull + (uint64_t)nsec / 100;
+    rt_w32(G_MEM, at, (uint32_t)t); rt_w32(G_MEM, at + 4, (uint32_t)(t >> 32));
+}
+/* GetFileAttributesExA(name, GetFileExInfoStandard, WIN32_FILE_ATTRIBUTE_DATA *) */
+IMPL(kernel32, GetFileAttributesExA)
+{
+    char p[2048]; struct stat st; uint32_t d = ARG(2);
+    if (host(c, ARG(0), p, 0) || stat(p, &st)) { w32_set_last_error(c, 2); RET(0, 3); }
+    rt_w32(G_MEM, d, S_ISDIR(st.st_mode) ? 0x10 : (st.st_mode & S_IWUSR) ? 0x20 : 0x21);
+#ifdef __APPLE__
+    ft_of(d + 4, st.st_birthtimespec.tv_sec, st.st_birthtimespec.tv_nsec); ft_of(d + 12, st.st_atimespec.tv_sec, st.st_atimespec.tv_nsec);
+    ft_of(d + 20, st.st_mtimespec.tv_sec, st.st_mtimespec.tv_nsec);
+#else
+    ft_of(d + 4, st.st_ctim.tv_sec, st.st_ctim.tv_nsec); ft_of(d + 12, st.st_atim.tv_sec, st.st_atim.tv_nsec); ft_of(d + 20, st.st_mtim.tv_sec, st.st_mtim.tv_nsec);
+#endif
+    uint64_t sz = S_ISDIR(st.st_mode) ? 0 : (uint64_t)st.st_size;
+    rt_w32(G_MEM, d + 28, (uint32_t)(sz >> 32)); rt_w32(G_MEM, d + 32, (uint32_t)sz);
+    RET(1, 3);
+}
 IMPL(kernel32, SetFileAttributesA) { char p[2048]; struct stat st; RET(!host(c, ARG(0), p, 0) && !stat(p, &st), 2); }
 IMPL(kernel32, CreateDirectoryA)
 {

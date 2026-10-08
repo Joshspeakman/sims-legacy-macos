@@ -123,6 +123,8 @@ static void fnv_havok(const char *drive,const char *game) {
  fprintf(stderr,"host: Havok step for %.0f fps (fMaxTime %.6f)\n",fps,1.0/fps);
 }
 #define ENSURE_PREFS(drive,game) do { fnv_prefs(drive,game); fnv_havok(drive,game); } while(0)
+#elif defined(SIMS_EDITION)
+#define ENSURE_PREFS(drive,game) do { (void)(drive); (void)(game); } while(0)
 #else
 #define ENSURE_PREFS(drive,game) ensure_resolution(drive)
 #endif

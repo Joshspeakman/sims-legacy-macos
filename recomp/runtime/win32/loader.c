@@ -36,12 +36,20 @@ static void canon(const char *dll, const char *fn, char *out, size_t cap)
     if (!strncmp(d, "d3dx9_", 6)) strcpy(d, "d3dx9_29");     /* every D3DX9 version: one implementation (DS2 29, Fallout NV 38) */
     char f[128]; const char *s = fn; size_t j = 0;
     if (*s == '#') { snprintf(f, sizeof f, "ord%s", s + 1); }
+    else if (!strncmp(s, "??2@", 4) || !strncmp(s, "??3@", 4)) snprintf(f, sizeof f, s[2] == '2' ? "op_new" : "op_delete");   /* C++ operators */
     else {
         if (*s == '_' && strchr(s, '@')) s++;
         for (; *s && *s != '@' && j < sizeof f - 1; s++) f[j++] = *s;
         f[j] = 0;
     }
     snprintf(out, cap, "%s!%s", d, f);
+}
+/* an IAT slot: the thunk of import k, or for a data import (msvcrt.c w32_data_import) the variable's address */
+static uint32_t iat_value(unsigned k)
+{
+    uint32_t w32_data_import(const char *canon_name);
+    uint32_t a = thunk_name[k] ? w32_data_import(thunk_name[k]) : 0;
+    return a ? a : THUNK_BASE + 16 * k;
 }
 static ImpFn lookup_impl(const char *canon_name)
 {
@@ -73,9 +81,10 @@ const char *w32_thunk_name(uint32_t index) { return index < nthunks ? thunk_name
 /* W32_TRACE=<path>: text log of every import call (thread, arguments, result) in real runs */
 static FILE *text_trace; static int text_trace_init; static pthread_mutex_t tt_lock = PTHREAD_MUTEX_INITIALIZER;
 void w32_crash_record_call(uint32_t index);
+__thread uint32_t w32_cur_import;                    /* the thunk being serviced (one handler for many entry points) */
 void rt_import(Ctx *c, uint32_t index)
 {
-    w32_crash_record_call(index);
+    w32_crash_record_call(index); w32_cur_import = index;
     if (!text_trace_init) { text_trace_init = 1; const char *p = getenv("W32_TRACE"); if (p && (text_trace = fopen(p, "w"))) setvbuf(text_trace, 0, _IOLBF, 0); }   /* lines survive an abrupt exit */
     static const char *tfilter; static int tf_init;                       /* W32_TRACE_ONLY=wsock32,kernel32!CreateFile: only those */
     if (!tf_init) { tf_init = 1; tfilter = getenv("W32_TRACE_ONLY"); }
@@ -205,7 +214,7 @@ int w32_load(const char *exe_path)
         char cn[200]; canon(dll, bang + 1, cn, sizeof cn);
         thunk_name[k] = strdup(cn); thunk_fn[k] = lookup_impl(cn);
         if (rt_imptab[k].iat - w32_image_base < w32_image_size)          /* the executable's; DLLs' when they are mapped */
-            rt_w32(G_MEM, rt_imptab[k].iat, THUNK_BASE + 16 * k);
+            rt_w32(G_MEM, rt_imptab[k].iat, iat_value(k));
     }
     nthunks = rt_imptab_n;
     /* static TLS */
@@ -339,7 +348,7 @@ static int load_image(int k)
         rt_w32(G_MEM, im->base + opt + 28, im->base);
     }
     image_loaded[k] = 1;
-    for (uint32_t j = im->imp_first; j < im->imp_first + im->imp_count; j++) rt_w32(G_MEM, rt_imptab[j].iat, THUNK_BASE + 16 * j);
+    for (uint32_t j = im->imp_first; j < im->imp_first + im->imp_count; j++) rt_w32(G_MEM, rt_imptab[j].iat, iat_value(j));
     bind_imports(k);
     return 0;
 }

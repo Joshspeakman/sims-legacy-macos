@@ -225,6 +225,7 @@ class Lifter:
         return []
 
     SEH_HANDLER3 = 0                                # _except_handler3 of the C runtime: found per executable (main())
+    SEH_HANDLER4, SEH_PROLOG4 = 0, ()               # _except_handler4 and the __SEH_prolog4(_GS) helpers that push it
     def seh_handlers(self, insns):
         """__except block addresses from the scope table pushed in the SEH prologue (push table; push _except_handler3)"""
         order = sorted(insns); out = []
@@ -232,12 +233,22 @@ class Lifter:
             a, b = insns[order[k]], insns[order[k + 1]]
             if a.mnemonic == 'push' and b.mnemonic == 'push' and a.operands[0].type == X.X86_OP_IMM and b.operands[0].type == X.X86_OP_IMM \
                     and (b.operands[0].imm & 0xffffffff) == self.SEH_HANDLER3:
-                table = a.operands[0].imm & 0xffffffff
-                for e in range(64):
-                    enc, flt, hnd = (self.pe.u32(table + 12 * e + 4 * j) for j in range(3))
-                    if enc is None or not (enc == 0xffffffff or enc < e) or not (self.TLO <= hnd < self.THI) or (flt and not (self.TLO <= flt < self.THI)): break
-                    if flt: out.append(hnd)
+                out += self.scope_handlers(a.operands[0].imm & 0xffffffff, 0, 0xffffffff)
+            # SEH4 (MSVC 2005 and later): push table; push _except_handler4 inline, or push table; call __SEH_prolog4
+            elif a.mnemonic == 'push' and a.operands[0].type == X.X86_OP_IMM and (
+                    b.mnemonic == 'push' and b.operands[0].type == X.X86_OP_IMM and self.SEH_HANDLER4 and (b.operands[0].imm & 0xffffffff) == self.SEH_HANDLER4
+                    or b.mnemonic == 'call' and b.operands[0].type == X.X86_OP_IMM and (b.operands[0].imm & 0xffffffff) in self.SEH_PROLOG4):
+                out += self.scope_handlers(a.operands[0].imm & 0xffffffff, 16, 0xfffffffe)
         return sorted(set(out))
+    def scope_handlers(self, table, skip, top):
+        """__except blocks of a scope table: records {enclosing level, filter, handler} after `skip` header bytes
+        (SEH4's GS/EH cookie offsets), enclosing level `top` for the outermost; a record without a filter is __finally"""
+        out = []
+        for e in range(64):
+            enc, flt, hnd = (self.pe.u32(table + skip + 12 * e + 4 * j) for j in range(3))
+            if enc is None or hnd is None or not (enc == top or enc < e) or not (self.TLO <= hnd < self.THI) or (flt and not (self.TLO <= flt < self.THI)): break
+            if flt: out.append(hnd)
+        return out
     def lift_function(self, f):
         insns = self.collect(f)
         # Flat guest blocks return to the dispatcher at every CALL. A C stack
@@ -299,7 +310,10 @@ class Lifter:
                     body = 'SPILL; rt_exception(c, 0x%08xu, 0xc000001du); /* illegal here: %s; %s %s */ RELOAD;' % (va, str(e).replace('"', '').replace('*/', ''), i.mnemonic, i.op_str)
                 else:                    # the game: a lifter gap, fatal with a clear message
                     body = 'SPILL; rt_unhandled(c, 0x%08xu, "%s"); /* %s %s */' % (va, str(e).replace('"', ''), i.mnemonic, i.op_str)
-            if seh and i.mnemonic == 'mov' and i.op_str == 'dword ptr fs:[0], esp':
+            prev = insns.get(order[k - 1]) if k else None
+            if seh and (i.mnemonic == 'mov' and (i.op_str == 'dword ptr fs:[0], esp' or         # _except_handler3 frames
+                                                 i.op_str == 'dword ptr fs:[0], eax' and prev and prev.mnemonic == 'lea' and prev.op_str == 'eax, [ebp - 0x10]')  # SEH4 inline
+                        or i.mnemonic == 'call' and i.operands[0].type == X.X86_OP_IMM and (i.operands[0].imm & 0xffffffff) in self.SEH_PROLOG4):
                 cases = ' '.join('case 0x%08xu: goto L_%08x;' % (h, h) for h in seh)
                 body += (' { static const uint32_t seh_h[] = {%s, 0}; seh_pad.frame = esp; seh_pad.handlers = seh_h; seh_pad.c = c; SPILL; rt_seh_push(&seh_pad);'
                          ' if (_setjmp(seh_pad.jb)) { RELOAD; switch (seh_pad.target) { %s } } }') % (', '.join('0x%08xu' % h for h in seh), cases)
@@ -428,7 +442,11 @@ class Lifter:
         if mn == 'popal':
             return 'edi = R32(esp); esi = R32(esp + 4); ebp = R32(esp + 8); ebx = R32(esp + 16); edx = R32(esp + 20); ecx = R32(esp + 24); eax = R32(esp + 28); esp += 32;'
         if mn == 'pushfd': return '{ uint32_t v = flags_get(&f); esp -= 4; W32(esp, v); }'
-        if mn == 'popfd': return '{ uint32_t v = R32(esp); esp += 4; flags_set(&f, v, 0xcd5u | F_DF); }'
+        # popfd keeps AC and ID (bits 18, 21): code toggles ID to find out whether the CPU has CPUID, as every one since
+        # the late 486 does (The Sims' CPU detection otherwise falls back to Cyrix and 386 probing)
+        if mn == 'popfd': return '{ uint32_t v = R32(esp); esp += 4; flags_set(&f, v, 0xcd5u | F_DF); f.eflags = (f.eflags & ~0x240000u) | (v & 0x240000u); }'
+        if mn == 'pushf': return '{ uint32_t v = flags_get(&f); esp -= 2; W16(esp, v); }'
+        if mn == 'popf': return '{ uint32_t v = R16(esp); esp += 2; flags_set(&f, v, 0xcd5u | F_DF); }'
         if mn == 'lahf': return 'eax = (eax & 0xffff00ffu) | ((flags_get(&f) & 0xd5u | 2u) << 8);'
         if mn == 'sahf': return 'flags_set(&f, (eax >> 8) & 0xffu, F_CF | F_PF | F_AF | F_ZF | F_SF);'
         if mn == 'clc': return 'flags_set(&f, 0, F_CF);'
@@ -765,6 +783,15 @@ def find_except_handler3(path):
     for m in re.finditer(rb'\x6a\xff\x68....\x68(....)\x64\xa1\x00\x00\x00\x00', d, re.S): c[struct.unpack('<I', m.group(1))[0]] += 1
     return c.most_common(1)[0][0] if c else 0
 
+def find_except_handler4(path):
+    """(_except_handler4, its __SEH_prolog4 helpers): each helper starts push _except_handler4; push fs:[0]. The Sims
+    Legacy (MSVC 2022): 0x7af450, prologs 0x7a94e0 and 0x944940 (_GS)."""
+    d = open(path, 'rb').read(); pe = PE(path); t = pe.section('.text'); c = collections.defaultdict(list)
+    for m in re.finditer(rb'\x68(....)\x64\xff\x35\x00\x00\x00\x00\x8b\x44\x24\x10\x89\x6c\x24\x10\x8d\x6c\x24\x10', d, re.S):
+        c[struct.unpack('<I', m.group(1))[0]].append(m.start() - t[3] + t[1])
+    if not c: return 0, ()
+    h = max(c, key=lambda k: len(c[k])); return h, tuple(c[h])
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('exe'); ap.add_argument('analysis'); ap.add_argument('outdir')
@@ -777,7 +804,8 @@ def main():
     L = Lifter(a.exe, a.analysis); L.jt_cache = {}
     L.imp_index = {va: a.imp_base + k for k, (va, _) in enumerate(L.imports)}
     L.illegal_seh = bool(a.tag)
-    if not a.tag: L.SEH_HANDLER3 = find_except_handler3(a.exe)      # (DLLs keep the DS1 behaviour: CPU-check paths only)
+    if not a.tag:                                               # (DLLs keep the DS1 behaviour: CPU-check paths only)
+        L.SEH_HANDLER3 = find_except_handler3(a.exe); L.SEH_HANDLER4, L.SEH_PROLOG4 = find_except_handler4(a.exe)
     L.hooks = {} if a.tag else dict(HOOKS)
     L.overrides = {} if a.tag else dict(OVERRIDES)
     if not a.tag:
@@ -785,6 +813,8 @@ def main():
         edition = a.game if a.game in ('fnv', 'sims') else identify(a.exe, prepared=True)
         if edition in ('fnv', 'sims'):                            # Fallout: New Vegas, The Sims: none of the DS2 hooks apply
             L.hooks = {}; L.overrides = {}
+        if edition == 'sims':
+            L.overrides = {0x467020: 'crash reporting (crashpad): not started'}
         elif edition == 'broken-world':
             L.guest_flow = True
             L.hooks = dict(zip(PROFILES[edition]['hooks'], HOOKS.values()))
