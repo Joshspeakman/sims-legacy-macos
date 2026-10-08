@@ -2047,15 +2047,6 @@ IMPL(vulkan_1, vkCreateShaderModule)
     uint32_t r = (uint32_t)vkp.vkCreateShaderModule(device, pCreateInfo, 0, pShaderModule);
     vk_arena_free(&a); VK_TRACE("vkCreateShaderModule", r); RET(r, 4);
 }
-IMPL(vulkan_1, vkCreateSwapchainKHR)
-{
-    VkArena a = {0};
-    VkDevice device = (VkDevice)vkh_host(ARG(0));
-    VkSwapchainCreateInfoKHR *pCreateInfo = 0; { uint32_t p = ARG(1); if (p) { pCreateInfo = vk_arena(&a, sizeof *pCreateInfo * (1)); for (uint32_t k = 0; k < (1); k++) cin_VkSwapchainCreateInfoKHR(&a, p + 88 * k, &pCreateInfo[k]); } }
-    VkSwapchainKHR *pSwapchain = (VkSwapchainKHR *)VKPTR(ARG(3));
-    uint32_t r = (uint32_t)vkp.vkCreateSwapchainKHR(device, pCreateInfo, 0, pSwapchain);
-    vk_arena_free(&a); VK_TRACE("vkCreateSwapchainKHR", r); RET(r, 4);
-}
 IMPL(vulkan_1, vkDestroyBuffer)
 {
     VkArena a = {0};
@@ -2338,16 +2329,6 @@ IMPL(vulkan_1, vkGetPhysicalDeviceSurfaceSupportKHR)
     VkBool32 *pSupported = (VkBool32 *)VKPTR(ARG(4));
     uint32_t r = (uint32_t)vkp.vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice, queueFamilyIndex, surface, pSupported);
     vk_arena_free(&a); VK_TRACE("vkGetPhysicalDeviceSurfaceSupportKHR", r); RET(r, 5);
-}
-IMPL(vulkan_1, vkGetSwapchainImagesKHR)
-{
-    VkArena a = {0};
-    VkDevice device = (VkDevice)vkh_host(ARG(0));
-    VkSwapchainKHR swapchain = (VkSwapchainKHR)((uint64_t)ARG(1) | (uint64_t)ARG(2) << 32);
-    uint32_t *pSwapchainImageCount = (uint32_t *)VKPTR(ARG(3));
-    VkImage *pSwapchainImages = (VkImage *)VKPTR(ARG(4));
-    uint32_t r = (uint32_t)vkp.vkGetSwapchainImagesKHR(device, swapchain, pSwapchainImageCount, pSwapchainImages);
-    vk_arena_free(&a); VK_TRACE("vkGetSwapchainImagesKHR", r); RET(r, 5);
 }
 IMPL(vulkan_1, vkResetCommandBuffer)
 {

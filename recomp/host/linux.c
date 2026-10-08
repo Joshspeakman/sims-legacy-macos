@@ -402,6 +402,7 @@ int main(int argc,char **argv) {
  set_window_icon(bin);
  #ifdef SIMS_EDITION
  SDL_StartTextInput(); w32_relative_cursor(0);                    /* the Sims' cursor is the system's */
+ if(test_mode) { w32_screen_w=ww; w32_screen_h=wh; }               /* the game sizes its frame to the screen: the test window's */
  extern PFN_vkGetInstanceProcAddr (*w32_host_vk_loader)(void); extern unsigned (*w32_host_vk_extensions)(const char **, unsigned);
  extern int (*w32_host_vk_surface)(VkInstance, VkSurfaceKHR *); extern void (*w32_host_vk_presented)(void);
  w32_host_vk_loader=sims_vk_loader; w32_host_vk_extensions=sims_vk_extensions; w32_host_vk_surface=sims_vk_surface; w32_host_vk_presented=sims_vk_presented;

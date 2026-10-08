@@ -22,6 +22,7 @@ MANUAL = {
     'vkAllocateCommandBuffers', 'vkFreeCommandBuffers', 'vkAllocateMemory', 'vkFreeMemory', 'vkMapMemory', 'vkUnmapMemory',
     'vkFlushMappedMemoryRanges', 'vkInvalidateMappedMemoryRanges', 'vkQueueSubmit', 'vkQueuePresentKHR', 'vkWaitForFences',
     'vkGetFenceStatus', 'vkQueueWaitIdle', 'vkDeviceWaitIdle', 'vkCreateDebugUtilsMessengerEXT', 'vkDestroyDebugUtilsMessengerEXT',
+    'vkCreateSwapchainKHR', 'vkGetSwapchainImagesKHR',
 }
 DISPATCHABLE = {'VkInstance', 'VkPhysicalDevice', 'VkDevice', 'VkQueue', 'VkCommandBuffer'}
 # guest (size, align) of scalar types
