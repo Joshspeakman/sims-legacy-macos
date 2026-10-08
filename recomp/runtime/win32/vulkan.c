@@ -13,6 +13,7 @@
 #include <sys/mman.h>
 
 int vk_trace;
+static uint32_t present_family;                        /* 1 + the first queue family the game takes a queue from */
 /* host hooks (host/linux.c, host/main.m) */
 PFN_vkGetInstanceProcAddr (*w32_host_vk_loader)(void);                         /* the host's vkGetInstanceProcAddr */
 unsigned (*w32_host_vk_extensions)(const char **names, unsigned cap);          /* instance extensions for surfaces */
@@ -260,6 +261,7 @@ IMPL(vulkan_1, vkDestroyDevice) { VkDevice d = vkh_host(ARG(0)); if (d) { vkp.vk
 IMPL(vulkan_1, vkGetDeviceQueue)                                        /* (device, family, index, VkQueue *) */
 {
     VkQueue q = 0; vkp.vkGetDeviceQueue(vkh_host(ARG(0)), ARG(1), ARG(2), &q);
+    if (!present_family) present_family = ARG(1) + 1;
     rt_w32(G_MEM, ARG(3), vkh_guest(q)); RET(0, 4);
 }
 IMPL(vulkan_1, vkAllocateCommandBuffers)                                /* (device, info, VkCommandBuffer *) */
@@ -422,10 +424,19 @@ IMPL(vulkan_1, vkQueueSubmit)                                           /* (queu
     VkResult r = vkp.vkQueueSubmit(vkh_host(ARG(0)), n, s, (VkFence)((uint64_t)ARG(3) | (uint64_t)ARG(4) << 32));
     vk_arena_free(&a); VK_TRACE("vkQueueSubmit", r); RET(r, 5);
 }
+static uint32_t presented;
+struct Swap; int shot_due(uint32_t frame);
+static VkSemaphore shot_copy(VkQueue q, struct Swap *s, uint32_t index, const VkPresentInfoKHR *pi);
+static void shot_save(struct Swap *s, uint32_t frame);
+static struct Swap *swap_find(VkSwapchainKHR sc);
 IMPL(vulkan_1, vkQueuePresentKHR)                                       /* (queue, present info) */
 {
     VkArena a = {0}; VkPresentInfoKHR pi; cin_VkPresentInfoKHR(&a, ARG(1), &pi);
-    VkResult r = vkp.vkQueuePresentKHR(vkh_host(ARG(0)), &pi);
+    VkQueue q = vkh_host(ARG(0)); uint32_t frame = ++presented; struct Swap *s = 0; VkSemaphore sem = 0;
+    if (getenv("W32_VK_SHOT") && pi.swapchainCount && shot_due(frame) && (s = swap_find(pi.pSwapchains[0])) && pi.pImageIndices[0] < 16)
+        if ((sem = shot_copy(q, s, pi.pImageIndices[0], &pi))) { pi.waitSemaphoreCount = 1; pi.pWaitSemaphores = &sem; }
+    VkResult r = vkp.vkQueuePresentKHR(q, &pi);
+    if (sem) shot_save(s, frame);
     vk_arena_free(&a);
     if (r >= 0 && w32_host_vk_presented) w32_host_vk_presented();
     VK_TRACE("vkQueuePresentKHR", r); RET(r, 2);
@@ -444,3 +455,107 @@ IMPL(vulkan_1, vkGetFenceStatus)                                        /* (devi
 }
 IMPL(vulkan_1, vkQueueWaitIdle) { VkResult r = vkp.vkQueueWaitIdle(vkh_host(ARG(0))); if (r == VK_SUCCESS) shadow_in(); RET(r, 1); }
 IMPL(vulkan_1, vkDeviceWaitIdle) { VkResult r = vkp.vkDeviceWaitIdle(vkh_host(ARG(0))); if (r == VK_SUCCESS) shadow_in(); RET(r, 1); }
+
+/* ---- swapchains, and screenshots of what is presented (W32_VK_SHOT=<path prefix>, W32_VK_SHOT_AT=<frame>,<frame>...:
+ * <prefix><frame>.png). The image is copied to a buffer between the game's rendering and the present: a submission
+ * waits on the present's semaphores and signals one the present then waits on. ---- */
+#include <zlib.h>
+struct Swap { VkSwapchainKHR sc; VkDevice dev; VkFormat fmt; VkExtent2D ext; VkImage img[16]; uint32_t nimg; };
+static struct Swap swaps[8]; static int nswaps;
+static struct Swap *swap_find(VkSwapchainKHR sc) { for (int k = 0; k < nswaps; k++) if (swaps[k].sc == sc) return &swaps[k]; return 0; }
+IMPL(vulkan_1, vkCreateSwapchainKHR)                                    /* (device, info, allocator, VkSwapchainKHR *) */
+{
+    VkDevice d = vkh_host(ARG(0)); VkArena a = {0}; VkSwapchainCreateInfoKHR ci; cin_VkSwapchainCreateInfoKHR(&a, ARG(1), &ci);
+    if (getenv("W32_VK_SHOT")) ci.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    VkSwapchainKHR sc = 0; VkResult r = vkp.vkCreateSwapchainKHR(d, &ci, 0, &sc);
+    fprintf(stderr, "vulkan: swapchain %ux%u format %d, %u images, present mode %d -> %d\n", ci.imageExtent.width, ci.imageExtent.height, ci.imageFormat, ci.minImageCount, ci.presentMode, r);
+    if (r == VK_SUCCESS) {
+        struct Swap *s = swap_find(ci.oldSwapchain); if (!s && nswaps < 8) s = &swaps[nswaps++];
+        if (s) { memset(s, 0, sizeof *s); s->sc = sc; s->dev = d; s->fmt = ci.imageFormat; s->ext = ci.imageExtent; }
+        rt_w64(G_MEM, ARG(3), (uint64_t)sc);
+    }
+    vk_arena_free(&a); RET(r, 4);
+}
+IMPL(vulkan_1, vkGetSwapchainImagesKHR)                                 /* (device, swapchain (2), uint32_t *count, VkImage *) */
+{
+    VkSwapchainKHR sc = (VkSwapchainKHR)((uint64_t)ARG(1) | (uint64_t)ARG(2) << 32);
+    VkResult r = vkp.vkGetSwapchainImagesKHR(vkh_host(ARG(0)), sc, VKPTR(ARG(3)), VKPTR(ARG(4)));
+    struct Swap *s = swap_find(sc);
+    if (s && ARG(4) && r >= 0) { s->nimg = rt_r32(G_MEM, ARG(3)); if (s->nimg > 16) s->nimg = 16; memcpy(s->img, G_MEM + ARG(4), 8 * s->nimg); }
+    RET(r, 5);
+}
+static void png_write(const char *path, const uint8_t *rgb, uint32_t w, uint32_t h)
+{
+    size_t raw_n = (size_t)(w * 3 + 1) * h; uint8_t *raw = malloc(raw_n);
+    for (uint32_t y = 0; y < h; y++) { raw[y * (w * 3 + 1)] = 0; memcpy(raw + y * (w * 3 + 1) + 1, rgb + (size_t)y * w * 3, w * 3); }
+    uLongf zn = compressBound(raw_n); uint8_t *z = malloc(zn); compress2(z, &zn, raw, raw_n, 6);
+    FILE *f = fopen(path, "wb"); if (!f) { free(raw); free(z); return; }
+    static const uint8_t sig[8] = {137, 'P', 'N', 'G', 13, 10, 26, 10}; fwrite(sig, 1, 8, f);
+    #define BE32(v) (uint8_t)((v) >> 24), (uint8_t)((v) >> 16), (uint8_t)((v) >> 8), (uint8_t)(v)
+    uint8_t ihdr[17] = {'I', 'H', 'D', 'R', BE32(w), BE32(h), 8, 2, 0, 0, 0};
+    uint8_t len[4] = {BE32(13u)}; fwrite(len, 1, 4, f); fwrite(ihdr, 1, 17, f);
+    uint8_t cb[4] = {BE32((uint32_t)crc32(0, ihdr, 17))}; fwrite(cb, 1, 4, f);
+    uint8_t len2[4] = {BE32((uint32_t)zn)}; fwrite(len2, 1, 4, f); fwrite("IDAT", 1, 4, f); fwrite(z, 1, zn, f);
+    uint8_t cb2[4] = {BE32((uint32_t)crc32(crc32(0, (const Bytef *)"IDAT", 4), z, (uInt)zn))}; fwrite(cb2, 1, 4, f);
+    uint8_t len3[4] = {0, 0, 0, 0}; fwrite(len3, 1, 4, f); fwrite("IEND", 1, 4, f);
+    uint8_t cb3[4] = {BE32((uint32_t)crc32(0, (const Bytef *)"IEND", 4))}; fwrite(cb3, 1, 4, f);
+    #undef BE32
+    fclose(f); free(raw); free(z);
+}
+int shot_due(uint32_t frame)
+{
+    const char *at = getenv("W32_VK_SHOT_AT"); if (!at) return 0;
+    for (const char *p = at; *p; ) { char *e; unsigned long v = strtoul(p, &e, 10); if (e == p) break; if (v == frame) return 1; p = *e ? e + 1 : e; }
+    return 0;
+}
+/* copy the image about to be presented; returns the semaphore the present must wait on instead, or 0 */
+static struct { VkDevice d; VkCommandPool pool; VkCommandBuffer cb; VkFence fence; VkSemaphore sem; VkBuffer buf; VkDeviceMemory mem; VkDeviceSize size; } shot;
+static VkSemaphore shot_copy(VkQueue q, struct Swap *s, uint32_t index, const VkPresentInfoKHR *pi)
+{
+    VkDevice d = s->dev; VkDeviceSize need = (VkDeviceSize)s->ext.width * s->ext.height * 4;
+    if (shot.d != d || shot.size < need) {
+        if (shot.d == d) { vkp.vkDeviceWaitIdle(d); vkp.vkDestroyBuffer(d, shot.buf, 0); vkp.vkFreeMemory(d, shot.mem, 0); }
+        else {
+            VkCommandPoolCreateInfo pc = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, 0, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, present_family - 1};
+            vkp.vkCreateCommandPool(d, &pc, 0, &shot.pool);
+            VkCommandBufferAllocateInfo ca = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, 0, shot.pool, VK_COMMAND_BUFFER_LEVEL_PRIMARY, 1};
+            vkp.vkAllocateCommandBuffers(d, &ca, &shot.cb);
+            VkFenceCreateInfo fc = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO}; vkp.vkCreateFence(d, &fc, 0, &shot.fence);
+            VkSemaphoreCreateInfo sc = {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO}; vkp.vkCreateSemaphore(d, &sc, 0, &shot.sem);
+        }
+        VkBufferCreateInfo bc = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, 0, 0, need, VK_BUFFER_USAGE_TRANSFER_DST_BIT};
+        vkp.vkCreateBuffer(d, &bc, 0, &shot.buf);
+        VkMemoryRequirements mr; vkp.vkGetBufferMemoryRequirements(d, shot.buf, &mr);
+        DevInfo *di = dev_info(d); uint32_t type = 0, want = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        for (uint32_t k = 0; di && k < di->mem.memoryTypeCount; k++)
+            if ((mr.memoryTypeBits >> k & 1) && (di->mem.memoryTypes[k].propertyFlags & want) == want) { type = k; break; }
+        VkMemoryAllocateInfo ma = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, 0, mr.size, type};
+        vkp.vkAllocateMemory(d, &ma, 0, &shot.mem); vkp.vkBindBufferMemory(d, shot.buf, shot.mem, 0);
+        shot.d = d; shot.size = need;
+    }
+    VkCommandBufferBeginInfo bi = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, 0, VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
+    vkp.vkResetCommandBuffer(shot.cb, 0); vkp.vkBeginCommandBuffer(shot.cb, &bi);
+    VkImageMemoryBarrier b = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, 0, VK_ACCESS_MEMORY_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+        VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, s->img[index], {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+    vkp.vkCmdPipelineBarrier(shot.cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, 0, 0, 0, 1, &b);
+    VkBufferImageCopy r = {0, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0}, {s->ext.width, s->ext.height, 1}};
+    vkp.vkCmdCopyImageToBuffer(shot.cb, s->img[index], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, shot.buf, 1, &r);
+    b.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT; b.dstAccessMask = 0; b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL; b.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    vkp.vkCmdPipelineBarrier(shot.cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, 0, 0, 0, 1, &b);
+    vkp.vkEndCommandBuffer(shot.cb);
+    VkPipelineStageFlags st[8]; for (int k = 0; k < 8; k++) st[k] = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    VkSubmitInfo si = {VK_STRUCTURE_TYPE_SUBMIT_INFO, 0, pi->waitSemaphoreCount < 8 ? pi->waitSemaphoreCount : 8, pi->pWaitSemaphores, st, 1, &shot.cb, 1, &shot.sem};
+    vkp.vkResetFences(d, 1, &shot.fence);
+    return vkp.vkQueueSubmit(q, 1, &si, shot.fence) == VK_SUCCESS ? shot.sem : 0;
+}
+static void shot_save(struct Swap *s, uint32_t frame)
+{
+    vkp.vkWaitForFences(shot.d, 1, &shot.fence, VK_TRUE, ~0ull);
+    void *p = 0; if (vkp.vkMapMemory(shot.d, shot.mem, 0, VK_WHOLE_SIZE, 0, &p)) return;
+    uint32_t w = s->ext.width, h = s->ext.height; uint8_t *rgb = malloc((size_t)w * h * 3); const uint8_t *src = p;
+    int bgr = s->fmt == VK_FORMAT_B8G8R8A8_UNORM || s->fmt == VK_FORMAT_B8G8R8A8_SRGB;
+    for (size_t k = 0; k < (size_t)w * h; k++) { rgb[3 * k] = src[4 * k + (bgr ? 2 : 0)]; rgb[3 * k + 1] = src[4 * k + 1]; rgb[3 * k + 2] = src[4 * k + (bgr ? 0 : 2)]; }
+    vkp.vkUnmapMemory(shot.d, shot.mem);
+    char path[1024]; snprintf(path, sizeof path, "%s%u.png", getenv("W32_VK_SHOT"), frame); png_write(path, rgb, w, h); free(rgb);
+    fprintf(stderr, "vulkan: frame %u (%ux%u) saved to %s\n", frame, w, h, path);
+}
