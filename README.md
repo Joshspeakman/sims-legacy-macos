@@ -6,11 +6,19 @@ dungeon-siege-2-macos, diablo-2-macos and fallout-nv-macos do for their games. N
 Nothing from the game is in this repository: the build regenerates everything locally from your Steam files, and the
 game folder is only read.
 
-**State: early work in progress (2026-10-07).** Development runs on Linux first (the same tree builds the Linux and
-the Mac host). The recompiled `Sims.exe` starts, creates its Vulkan device and swapchain, copies the template
-neighbourhood into Saved Games on first run, loads sounds and music, and draws the neighbourhood, Select a Family and
-lot views correctly; clicking a house opens its lot (build/buy panel, the game's notices). Sims walking around a lot
-haven't been tried yet, sound isn't checked, and the Mac host hasn't been built for this game yet. Details and next steps: [docs/SIMS-PORT.md](docs/SIMS-PORT.md).
+**State: plays on Linux; the Mac app is written and waiting for its first build on a Mac (2026-10-07).** The
+recompiled `Sims.exe` runs the neighbourhood, Create a Sim, lots in live and buy mode (Sims walking, pie menus, day
+and night), saving, and music; a 40-minute run at full speed had no faults. The macOS host (MoltenVK), its build and
+the installer are in place but haven't been compiled yet. Details, what's verified and the Mac steps:
+[docs/SIMS-PORT.md](docs/SIMS-PORT.md).
+
+## Install (Mac, once the first Mac build is done)
+
+```sh
+brew install molten-vk
+./install.sh --game-dir "/path/to/The Sims Legacy Collection"   # a copy of the Steam (Windows) install
+./install.sh --steamcmd <your Steam user name>                  # or let SteamCMD download the Windows build you own
+```
 
 ## How it works
 
