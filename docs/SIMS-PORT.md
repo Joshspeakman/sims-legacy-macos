@@ -72,10 +72,12 @@ extensions and layers. `vkCreateDevice` drops unavailable extensions and feature
 - Lots: empty and furnished ones open; the game's notices; save from the options panel (the house file is written);
   back to the neighbourhood; moving a family into a lot (Purchase House).
 - Live mode: Sims walking and running, pie menus (Go Here), reading the paper, visitors with dogs, time passing,
-  day turning to night; buy mode (catalogue, a chair bought and placed for §80).
+  day turning to night; buy mode (catalogue, a chair bought and placed for §80); build mode's tools.
+- Quitting: the window's close (WM_CLOSE, what Cmd-Q sends on the Mac) shows the game's "Quit?" dialog; OK ends the
+  game with exit 0.
 - Sound: music through DirectSound matches an independent decode of the same MP3 (correlation 0.97–0.99, no drift).
-- A 40-minute soak at the fastest speed with a family of four: no faults, about 47 frames a second (hidden window),
-  the game thread using about half a core, 500 MB resident.
+- A 40-minute soak at the fastest speed with a family of four: no faults, 139,323 frames presented (about 58 a
+  second in the hidden test window), the game thread using about half a core, 500 MB resident.
 - All three mapped-memory modes render: placed (default here), imported (`W32_VK_MAP=import`, MoltenVK's), shadowed.
 - What the game needs from Vulkan: `VK_KHR_swapchain`, no optional features, formats D32_SFLOAT, B8G8R8A8_UNORM,
   R8_UNORM (all on Apple GPUs; D24S8 would be swapped by `vk_fix_format`).
@@ -83,7 +85,8 @@ extensions and layers. `vkCreateDevice` drops unavailable extensions and feature
 
 ## The Mac: what's ready, and the first session there
 
-Written on Linux and **not compiled yet** (no Mac here): `recomp/host/sims_mac.m` (AppKit window, CAMetalLayer,
+Written on Linux and **not compiled yet** (no Mac here; a read-only portability audit of the runtime, the host, the
+build script and the installer found and fixed bash 3.2, ucontext, quoting, Retina-scale and quit issues): `recomp/host/sims_mac.m` (AppKit window, CAMetalLayer,
 MoltenVK loader and `VK_EXT_metal_surface`, absolute mouse, keyboard, crash reports, `launch.plist`, test scripts),
 `recomp/tools/build_mac_sims.sh` (runtime + host → `recomp/work/sims/app/SimsNative`, chosen by `build_runtime.sh`
 on Darwin) and `install.sh` (finds the game or downloads it with SteamCMD, needs `brew install molten-vk`, installs
