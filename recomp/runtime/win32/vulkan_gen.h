@@ -117,6 +117,7 @@ struct VkHostProcs {
     PFN_vkUnmapMemory2KHR vkUnmapMemory2KHR;
     PFN_vkGetPhysicalDeviceProperties2 vkGetPhysicalDeviceProperties2;
     PFN_vkGetPhysicalDeviceFeatures2 vkGetPhysicalDeviceFeatures2;
+    PFN_vkGetMemoryHostPointerPropertiesEXT vkGetMemoryHostPointerPropertiesEXT;
 };
 extern struct VkHostProcs vkp;
 extern const char *const vk_proc_names[];

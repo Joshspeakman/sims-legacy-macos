@@ -2483,4 +2483,4 @@ const char *const vk_proc_names[] = {
     "vkUnmapMemory",
     "vkUpdateDescriptorSets",
     "vkWaitForFences",
-    "vkMapMemory2KHR", "vkUnmapMemory2KHR", "vkGetPhysicalDeviceProperties2", "vkGetPhysicalDeviceFeatures2", 0};
+    "vkMapMemory2KHR", "vkUnmapMemory2KHR", "vkGetPhysicalDeviceProperties2", "vkGetPhysicalDeviceFeatures2", "vkGetMemoryHostPointerPropertiesEXT", 0};
