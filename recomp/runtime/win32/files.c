@@ -273,7 +273,7 @@ IMPL(kernel32, GetTempFileNameA)
 }
 
 /* ---- file handles ---- */
-typedef struct File { int fd; char path[1024]; int is_dir; } File;
+typedef struct File { int fd; char path[1024]; int is_dir; char win[520]; } File;   /* win: the name it was opened by */
 static uint64_t ft_from_ts(struct timespec t)
 {
     if (w32_deterministic) return 132000000000000000ull;          /* harness: file times must not differ between runs */
@@ -301,7 +301,7 @@ IMPL(kernel32, CreateFileA)
     if ((of & O_CREAT) && !(access & 0x40000000)) of = (of & ~O_ACCMODE) | O_RDWR;
     int fd = open(p, of, 0644);
     if (fd < 0) { w32_set_last_error(c, errno == ENOENT ? 3 : 5); RET(0xffffffffu, 7); }
-    File *f = calloc(1, sizeof *f); f->fd = fd; f->is_dir = isdir; snprintf(f->path, sizeof f->path, "%s", p);
+    File *f = calloc(1, sizeof *f); f->fd = fd; f->is_dir = isdir; snprintf(f->path, sizeof f->path, "%s", p); snprintf(f->win, sizeof f->win, "%s", GS(ARG(0)));
     w32_set_last_error(c, (exists && (disp == 2 || disp == 4)) ? 183 : 0);
     uint32_t h = h_new(H_FILE, f);
     if (getenv("W32_FILELOG")) fprintf(stderr, "w32: CreateFileA(%s) -> %x fd %d (%s)\n", GS(ARG(0)), h, fd, p);
@@ -513,3 +513,4 @@ IMPL(kernel32, UnmapViewOfFile)
     RET(0, 1);
 }
 int w32_file_fd(uint32_t h) { HObj *o = h_get(h, H_FILE); return o ? ((File *)o->p)->fd : -1; }
+const char *w32_file_win_path(uint32_t h) { HObj *o = h_get(h, H_FILE); return o ? ((File *)o->p)->win : 0; }

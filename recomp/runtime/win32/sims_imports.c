@@ -522,3 +522,33 @@ IMPL(kernel32, FreeLibraryAndExitThread)                               /* (modul
     rt_w32(G_MEM, c->esp + 4, ARG(1)); void imp_kernel32_ExitThread(Ctx *); imp_kernel32_ExitThread(c);
 }
 IMPL(kernel32, _lclose) { void imp_kernel32_CloseHandle(Ctx *); imp_kernel32_CloseHandle(c); c->eax = c->eax ? 0 : 0xffffffffu; }   /* HFILE_ERROR */
+
+/* ---- kernel32: what std::filesystem uses to copy the template user data on first run ---- */
+IMPL(kernel32, CreateDirectoryExW)                                     /* (template, new, attributes): the template is not copied */
+{
+    rt_w32(G_MEM, c->esp + 4, ARG(1)); rt_w32(G_MEM, c->esp + 8, ARG(2));
+    void imp_kernel32_CreateDirectoryW(Ctx *); imp_kernel32_CreateDirectoryW(c);       /* pops 2 of our 3 */
+    c->esp += 4;
+}
+IMPL(kernel32, MoveFileExA)                                            /* (from, to, flags: 1 = replace existing) */
+{
+    char a[2048], b[2048];
+    if (w32_host_path(GS(ARG(0)), a, sizeof a, 0) || w32_host_path(GS(ARG(1)), b, sizeof b, 1)) { w32_set_last_error(c, 3); RET(0, 3); }
+    struct stat st; if (!(ARG(2) & 1) && !stat(b, &st)) { w32_set_last_error(c, 183); RET(0, 3); }
+    if (rename(a, b)) { w32_set_last_error(c, 2); RET(0, 3); }
+    RET(1, 3);
+}
+IMPL(kernel32, MoveFileExW) { VIA_ANSI(imp_kernel32_MoveFileExA, 3); }
+IMPL(kernel32, SetCurrentDirectoryW) { w32_set_last_error(c, 5); RET(0, 1); }          /* the game's folder stays current */
+IMPL(kernel32, CreateHardLinkW) { w32_set_last_error(c, 1); RET(0, 3); }
+IMPL(kernel32, CreateSymbolicLinkW) { w32_set_last_error(c, 1); RET(0, 3); }
+IMPL(kernel32, SetFileInformationByHandle) { RET(1, 4); }             /* attributes and times: kept as they are */
+IMPL(kernel32, GetFinalPathNameByHandleW)                              /* (handle, buffer, cap, flags): the path it was opened by */
+{
+    extern const char *w32_file_win_path(uint32_t h);
+    const char *p = w32_file_win_path(ARG(0)); if (!p) { w32_set_last_error(c, 6); RET(0, 4); }
+    char full[1100]; snprintf(full, sizeof full, "\\\\?\\%s", p);
+    int n = w32_mb_to_wide(0, (const uint8_t *)full, -1, 0, 0);
+    if ((uint32_t)n > ARG(2)) RET((uint32_t)n, 4);
+    w32_mb_to_wide(0, (const uint8_t *)full, -1, (uint16_t *)GP(ARG(1)), (int)ARG(2)); RET((uint32_t)n - 1, 4);
+}
