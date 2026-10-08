@@ -395,6 +395,8 @@ IMPL(user32, DispatchMessageA)
 {
     uint32_t m = ARG(0), hwnd = rt_r32(G_MEM, m), msg = rt_r32(G_MEM, m + 4);
     Win *w = W(hwnd);
+    { static int log = -1; if (log < 0) log = getenv("W32_MSGLOG") != 0;    /* input messages the game dispatches */
+      if (log && ((msg >= 0x100 && msg <= 0x109) || (msg >= 0x201 && msg <= 0x20e))) fprintf(stderr, "w32: dispatch %08x msg %04x wp %x lp %x to %08x\n", hwnd, msg, rt_r32(G_MEM, m + 8), rt_r32(G_MEM, m + 12), w ? w->wndproc : 0); }
     if (msg == WM_TIMER_ && rt_r32(G_MEM, m + 12)) {         /* a TIMERPROC(hwnd, WM_TIMER, id, time) */
         uint32_t a[4] = {hwnd, WM_TIMER_, rt_r32(G_MEM, m + 8), rt_r32(G_MEM, m + 16)};
         w32_callback(c, rt_r32(G_MEM, m + 12), 4, a); RET(0, 1);
