@@ -8,9 +8,9 @@ game folder is only read.
 
 **State: early work in progress (2026-10-07).** Development runs on Linux first (the same tree builds the Linux and
 the Mac host). The recompiled `Sims.exe` starts, creates its Vulkan device and swapchain, copies the template
-neighbourhood into Saved Games on first run, loads sounds and music, and draws the neighbourhood screen and the
-Select a Family screen correctly; clicks on the interface work. Entering a lot doesn't yet. The Mac host hasn't been
-built for this game yet. Details and next steps: [docs/SIMS-PORT.md](docs/SIMS-PORT.md).
+neighbourhood into Saved Games on first run, loads sounds and music, and draws the neighbourhood, Select a Family and
+lot views correctly; clicking a house opens its lot (build/buy panel, the game's notices). Sims walking around a lot
+haven't been tried yet, sound isn't checked, and the Mac host hasn't been built for this game yet. Details and next steps: [docs/SIMS-PORT.md](docs/SIMS-PORT.md).
 
 ## How it works
 

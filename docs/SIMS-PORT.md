@@ -63,14 +63,17 @@ extensions and layers. `vkCreateDevice` drops unavailable extensions and feature
   swapchain 1024×768 B8G8R8A8_UNORM FIFO.
 - First run: the template user data copies completely; the neighbourhood screen draws with all its houses.
 - The family button opens Select a Family (portraits drawn) with its "Create a Family?" dialog.
-- 60–100 s runs without faults; about 30 presented frames a second in the hidden test window.
+- Clicking a lot in the neighbourhood opens it: an empty lot (build grid, the live/build/buy panel, "Paused", the cab
+  company notice) and an occupied one (house with pool, fences, flower beds; the Magic Town notice).
+- Runs reach the test timeout (60–100 s) without game faults (the host's teardown on the kill is item 5 below).
 
 ## Not working / next steps
 
-1. **Entering a lot.** A click (and a hover first, and a double click) on a house in the neighbourhood view does
-   nothing, while interface buttons respond. The game reads the cursor with `GetCursorPos` + `ScreenToClient` each
-   frame and gets button messages; find how the neighbourhood picks a lot (hover tooltip never appears) and what it
-   reads that we answer differently.
+1. **Live mode.** Dismiss the notices and let a family play: Sims (3D characters) walking, needs, objects in use,
+   time passing; then build and buy mode. One oddity: clicks on the marked Newbie house's roof (700,338 in the
+   1024×768 test window) do nothing while other lots open; the hover tooltip never appears in shots either (the
+   system cursor isn't in the swapchain). The real-window mouse path (absolute SDL coordinates) is written but has
+   only been exercised through the test script.
 2. **Sound.** DirectSound comes from the shared runtime; tests run with `W32_AUDIO_MUTE`. Check with `W32_AUDIOLOG=1`
    that music and effects reach the mixer.
 3. **The Mac host** (`recomp/host/main.m`, `build_runtime.sh` on Darwin): a Vulkan path like Linux's: MoltenVK
