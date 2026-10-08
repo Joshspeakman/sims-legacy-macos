@@ -96,9 +96,10 @@ int rt_override(Ctx *c, uint32_t addr)
         c->esp += 8;
         return 1;
 #elif defined(SIMS_EDITION)
-    case 0x00467020u:
-        /* The Sims: crash reporting (crashpad with a Backtrace upload URL) starts crashpad_handler.exe and stops the
-         * game when it can't; the port writes its own crash reports. cdecl (url, handler path, database name). */
+    default:
+        /* The Sims' only override (lift.py find_crashpad_init; 0x467020 in build 17905164): crash reporting (crashpad
+         * with a Backtrace upload URL) starts crashpad_handler.exe and stops the game when it can't; the port writes
+         * its own crash reports. cdecl (url, handler path, database name). */
         c->eax = 0; c->esp += 4;
         return 1;
 #else

@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <setjmp.h>
 #include <sched.h>
+#include <pthread.h>
 #include <sys/mman.h>
 #include "platform.h"
 
@@ -382,3 +383,13 @@ void rt_exception(Ctx *c, uint32_t pc, uint32_t code)
 /* weak default without the Win32 layer: no native features */
 __attribute__((weak)) void rt_hook(Ctx *c, uint32_t addr) { (void)c; (void)addr; }
 __attribute__((weak)) int rt_override(Ctx *c, uint32_t addr) { (void)c; (void)addr; return 0; }
+
+int rt_cas64_unaligned(uint8_t *p, uint64_t *expected, uint64_t desired)
+{
+    static pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&m);
+    uint64_t cur; memcpy(&cur, p, 8); int ok = cur == *expected;
+    if (ok) memcpy(p, &desired, 8); else *expected = cur;
+    pthread_mutex_unlock(&m);
+    return ok;
+}

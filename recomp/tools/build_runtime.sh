@@ -3,6 +3,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"; OUT="$1"; mkdir -p "$OUT/obj/rt"
 if [[ $(uname -s) == Linux ]]; then exec "$HERE/tools/build_linux.sh" "$OUT"; fi
+if [[ -f "$OUT/Sims.exe" ]]; then exec "$HERE/tools/build_mac_sims.sh" "$OUT"; fi      # The Sims: Vulkan on MoltenVK
 python3 "$HERE/tools/gen_imptab.py" "$OUT/imptab.c" "$HERE"/runtime/win32/*.c
 for f in "$HERE"/runtime/rt.c "$HERE"/runtime/win32/*.c "$OUT/imptab.c"; do
   opt=-O1; [ "$(basename "$f")" = native.c ] && opt="-O3 -ffp-contract=off"   # the native hot loops: optimised, no fused multiply-add
