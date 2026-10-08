@@ -1,7 +1,15 @@
 # Notices and credits
 
-**Dungeon Siege** © its respective rights holders. This project contains no part of the game. The installer recompiles
-the executable of a copy the user owns, after verifying its checksum, and the app reads the game's data from that copy.
+**The Sims Legacy Collection** © Electronic Arts. This project contains no part of the game. The build recompiles the
+executable of a copy the user owns (bought on Steam), after verifying its checksum; it undoes the Steam wrapper on a
+copy in the local build folder so the code can be read, and the app reads the game's data from the user's copy.
+
+This repository started from the Dungeon Siege II / Fallout: New Vegas recompiler (Dungeon Siege and Fallout are ©
+their respective rights holders; no part of those games is included either).
+
+Included:
+- **Vulkan-Headers** (Apache-2.0 / MIT, The Khronos Group): `recomp/third_party/vulkan` (headers and the `vk.xml`
+  registry the Vulkan thunks are generated from), vulkan-sdk-1.4.341.0. https://github.com/KhronosGroup/Vulkan-Headers
 
 Used at build time (installed into `recomp/.venv` with pip, not redistributed here):
 - **Capstone** (BSD) — disassembly for the recompiler. https://www.capstone-engine.org/
