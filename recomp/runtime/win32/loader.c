@@ -31,7 +31,7 @@ static pthread_mutex_t thunk_lock = PTHREAD_MUTEX_INITIALIZER;
 static void canon(const char *dll, const char *fn, char *out, size_t cap)
 {
     char d[64]; size_t k = 0;
-    for (; dll[k] && dll[k] != '.' && k < sizeof d - 1; k++) d[k] = (char)(dll[k] >= 'A' && dll[k] <= 'Z' ? dll[k] + 32 : dll[k]);
+    for (; dll[k] && dll[k] != '.' && k < sizeof d - 1; k++) d[k] = (char)(dll[k] >= 'A' && dll[k] <= 'Z' ? dll[k] + 32 : dll[k] == '-' ? '_' : dll[k]);   /* vulkan-1 -> vulkan_1 */
     d[k] = 0;
     if (!strncmp(d, "d3dx9_", 6)) strcpy(d, "d3dx9_29");     /* every D3DX9 version: one implementation (DS2 29, Fallout NV 38) */
     char f[128]; const char *s = fn; size_t j = 0;
@@ -249,6 +249,16 @@ int w32_load(const char *exe_path)
     w32_env_w = at;
     for (uint32_t s = w32_env_a; G_MEM[s]; ) { int l = (int)strlen(GS(s)) + 1; at += 2 * (uint32_t)w32_mb_to_wide(1252, G_MEM + s, l, (uint16_t *)GP(at), l); s += (uint32_t)l; }
     rt_w16(G_MEM, at, 0); at += 2;
+    {   /* PEB->ProcessParameters (RTL_USER_PROCESS_PARAMETERS): normalized, image path (+0x38) and command line (+0x40);
+         * the 2015+ C runtime reads it on every new thread */
+        at = (at + 15) & ~15u; uint32_t pp = at; memset(G_MEM + pp, 0, 0x2a0); at += 0x2a0;
+        rt_w32(G_MEM, pp, 0x2a0); rt_w32(G_MEM, pp + 4, 0x2a0); rt_w32(G_MEM, pp + 8, 1);
+        uint32_t cl = 0; while (rt_r16(G_MEM, w32_cmdline_w + 2 * cl)) cl++;
+        rt_w16(G_MEM, pp + 0x40, 2 * cl); rt_w16(G_MEM, pp + 0x42, 2 * cl + 2); rt_w32(G_MEM, pp + 0x44, w32_cmdline_w);
+        uint32_t ip = at, n = (uint32_t)w32_mb_to_wide(1252, (const uint8_t *)GS(w32_modname_a), -1, (uint16_t *)GP(ip), 260); at += 2 * n; at = (at + 3) & ~3u;
+        rt_w16(G_MEM, pp + 0x38, 2 * (n - 1)); rt_w16(G_MEM, pp + 0x3a, 2 * n); rt_w32(G_MEM, pp + 0x3c, ip);
+        rt_w32(G_MEM, PEB_ADDR + 0x10, pp);
+    }
     w32_load_static_images();
     return 0;
 }

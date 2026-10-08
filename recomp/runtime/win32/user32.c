@@ -129,9 +129,12 @@ IMPL(user32, ShowWindow)
     int was = w->visible;
     w->visible = cmd != 0; w->iconic = cmd == 2 || cmd == 6 || cmd == 7;
     if (w->visible != was) send(c, w->hwnd, WM_SHOWWINDOW, (uint32_t)w->visible, 0);
-    if (w->visible && !w->parent && (cmd == 1 || cmd == 5 || cmd == 3 || cmd == 10)) {
+    /* activation messages only when the activation changes, as on Windows: a window that shows itself while handling
+     * WM_ACTIVATEAPP (The Sims does) would otherwise recurse until its stack runs out */
+    if (w->visible && !w->parent && (cmd == 1 || cmd == 5 || cmd == 3 || cmd == 10) && (active_hwnd != w->hwnd || w->visible != was)) {
+        int activate = active_hwnd != w->hwnd;
         active_hwnd = focus_hwnd = w->hwnd;
-        send(c, w->hwnd, WM_ACTIVATEAPP, 1, 0); send(c, w->hwnd, WM_ACTIVATE, 1, 0); send(c, w->hwnd, WM_SETFOCUS, 0, 0);
+        if (activate) { send(c, w->hwnd, WM_ACTIVATEAPP, 1, 0); send(c, w->hwnd, WM_ACTIVATE, 1, 0); send(c, w->hwnd, WM_SETFOCUS, 0, 0); }
         send(c, w->hwnd, WM_SIZE, 0, ((uint32_t)w->h << 16) | (uint32_t)(w->w & 0xffff));
         w->invalid = 1;
     }

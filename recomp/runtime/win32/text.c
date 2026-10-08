@@ -157,15 +157,25 @@ static const char *locale_str(uint32_t t)
     case 0x24: return "0";                   case 0x25: return "0";        case 0x26: return "0";
     case 0x28: return "AM";                  case 0x29: return "PM";       case 0x50: return "";
     case 0x51: return "-";                   case 0x1001: return "English";case 0x1002: return "United States";
+    case 0x5c: return "en-US";               case 0x72: return "English (United States)"; case 0x6d: return "English";
     case 0x1003: return "h:mm:ss tt";        case 0x1004: return "1252";   case 0x1009: return "1";
-    case 0x100c: return "0";                 case 0x1014: return "1";      case 0x5a: return "en";
+    case 0x100c: return "0";                 case 0x1014: return "1";      case 0x5a: return "US";
     case 0x5b: return "en-US";               case 0x59: return "en";
     }
     return 0;
 }
+/* LOCALE_RETURN_NUMBER: the value as a DWORD (LOCALE_ILANGUAGE is hexadecimal, the others decimal) */
+static int locale_number(uint32_t type, uint32_t buf, int cap, int unit)
+{
+    const char *s = locale_str(type); if (!s) return -1;
+    uint32_t v = (uint32_t)strtoul(s, 0, (type & 0xffff) == 0x01 ? 16 : 10);
+    if (cap * unit < 4) return cap ? 0 : 4 / unit;
+    rt_w32(G_MEM, buf, v); return 4 / unit;
+}
 IMPL(kernel32, GetLocaleInfoA)
 {
     uint32_t type = ARG(1), buf = ARG(2); int cap = (int)ARG(3);
+    if (type & 0x20000000u) { int n = locale_number(type, buf, cap, 1); if (n <= 0) { w32_set_last_error(c, n ? 87 : 122); RET(0, 4); } RET(n, 4); }
     const char *s = locale_str(type);
     if (!s) { w32_set_last_error(c, 87); RET(0, 4); }
     int n = (int)strlen(s) + 1;
@@ -176,6 +186,7 @@ IMPL(kernel32, GetLocaleInfoA)
 IMPL(kernel32, GetLocaleInfoW)
 {
     uint32_t type = ARG(1), buf = ARG(2); int cap = (int)ARG(3);
+    if (type & 0x20000000u) { int n = locale_number(type, buf, cap, 2); if (n <= 0) { w32_set_last_error(c, n ? 87 : 122); RET(0, 4); } RET(n, 4); }
     const char *s = locale_str(type);
     if (!s) { w32_set_last_error(c, 87); RET(0, 4); }
     int n = (int)strlen(s) + 1;

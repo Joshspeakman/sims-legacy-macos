@@ -7,7 +7,7 @@ impl = set()
 for f in glob.glob(os.path.join(HERE, 'runtime', 'win32', '*.c')):
     for d, n in re.findall(r'^IMPL\((\w+),\s*(\w+)\)', open(f, errors='replace').read(), re.M): impl.add('%s!%s' % (d.lower(), n))
 def canon(dll, fn):
-    d = dll.split('.')[0].lower()
+    d = dll.split('.')[0].lower().replace('-', '_')
     if d.startswith('d3dx9_'): d = 'd3dx9_29'                  # loader.c: one D3DX9 for every version
     if fn.startswith('#'): return '%s!ord%s' % (d, fn[1:])
     if fn[:4] in ('??2@', '??3@'): return '%s!%s' % (d, 'op_new' if fn[2] == '2' else 'op_delete')

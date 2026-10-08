@@ -16,6 +16,16 @@
 #include "../../src/renderer/linux/renderer.h"
 #include "frame_trace.h"
 #include "frame_pacer.h"
+#ifdef SIMS_EDITION
+/* The Sims draws with Vulkan (runtime/win32/vulkan.c): the window is a Vulkan window and the game presents to it
+ * itself; this program pumps input and gives the runtime the loader and the window's surface. */
+#define VK_NO_PROTOTYPES
+#include <vulkan/vulkan.h>
+#include <SDL2/SDL_vulkan.h>
+#define HOST_WINDOW_API SDL_WINDOW_VULKAN
+#else
+#define HOST_WINDOW_API SDL_WINDOW_OPENGL
+#endif
 #ifndef DS_BUILD
 #define DS_BUILD "dev"
 #endif
@@ -306,6 +316,13 @@ static const char *script_tick(uint32_t fno)       /* returns a screenshot path 
     return shot;
 }
 
+#ifdef SIMS_EDITION
+static volatile uint32_t sims_frames;
+static PFN_vkGetInstanceProcAddr sims_vk_loader(void) { if(SDL_Vulkan_LoadLibrary(NULL)) { fprintf(stderr,"host: Vulkan: %s\n",SDL_GetError()); return NULL; } return (PFN_vkGetInstanceProcAddr)SDL_Vulkan_GetVkGetInstanceProcAddr(); }
+static unsigned sims_vk_extensions(const char **names,unsigned cap) { unsigned n=cap; return SDL_Vulkan_GetInstanceExtensions(window,&n,names)?n:0; }
+static int sims_vk_surface(VkInstance i,VkSurfaceKHR *s) { if(SDL_Vulkan_CreateSurface(window,i,s)) return 0; fprintf(stderr,"host: surface: %s\n",SDL_GetError()); return -1; }
+static void sims_vk_presented(void) { __atomic_add_fetch(&sims_frames,1,__ATOMIC_RELEASE); w32_crash_heartbeat(3); }
+#endif
 static int events(void) {
  SDL_Event e;
  while(SDL_PollEvent(&e)) switch(e.type) {
@@ -380,19 +397,31 @@ int main(int argc,char **argv) {
  const char *mode=getenv("DS_WINDOW_MODE"); int fullscreen=!test_mode && (!mode || strcmp(mode,"windowed"));
  int ww=fullscreen?w32_screen_w:w32_screen_w*4/5, wh=fullscreen?w32_screen_h:w32_screen_h*4/5;
  if(test_mode) { ww=1024; wh=768; }
- window=SDL_CreateWindow(title,SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,ww,wh,SDL_WINDOW_OPENGL|SDL_WINDOW_RESIZABLE|SDL_WINDOW_ALLOW_HIGHDPI|(test_mode?SDL_WINDOW_HIDDEN:SDL_WINDOW_SHOWN)|(fullscreen?SDL_WINDOW_FULLSCREEN_DESKTOP:0));
+ window=SDL_CreateWindow(title,SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,ww,wh,HOST_WINDOW_API|SDL_WINDOW_RESIZABLE|SDL_WINDOW_ALLOW_HIGHDPI|(test_mode?SDL_WINDOW_HIDDEN:SDL_WINDOW_SHOWN)|(fullscreen?SDL_WINDOW_FULLSCREEN_DESKTOP:0));
  if(!window) { fprintf(stderr,"window: %s\n",SDL_GetError()); return 1; }
  set_window_icon(bin);
+ #ifdef SIMS_EDITION
+ SDL_StartTextInput(); w32_relative_cursor(0);                    /* the Sims' cursor is the system's */
+ extern PFN_vkGetInstanceProcAddr (*w32_host_vk_loader)(void); extern unsigned (*w32_host_vk_extensions)(const char **, unsigned);
+ extern int (*w32_host_vk_surface)(VkInstance, VkSurfaceKHR *); extern void (*w32_host_vk_presented)(void);
+ w32_host_vk_loader=sims_vk_loader; w32_host_vk_extensions=sims_vk_extensions; w32_host_vk_surface=sims_vk_surface; w32_host_vk_presented=sims_vk_presented;
+ #else
  SDL_GLContext gl=SDL_GL_CreateContext(window); if(!gl) { fprintf(stderr,"OpenGL: %s\n",SDL_GetError()); return 1; }
  SDL_GL_SetSwapInterval(test_mode?0:getenv("DSR_VSYNC")?atoi(getenv("DSR_VSYNC")):1); SDL_StartTextInput(); if(!test_mode) SDL_SetRelativeMouseMode(SDL_TRUE);
  w32_relative_cursor(0);  /* DS2 reads the absolute virtual cursor. */
+ #endif
  SDL_GetWindowSize(window,&ww,&wh);
  fprintf(stderr,"host: %s, %s %dx%d, title '%s'\n",SDL_GetCurrentVideoDriver(),fullscreen?"fullscreen":"windowed",ww,wh,SDL_GetWindowTitle(window));
  fprintf(stderr,"host: display %d Hz, FPS cap %s, swap interval %d\n",w32_screen_hz,getenv("DSR_FPSCAP"),SDL_GL_GetSwapInterval());
+ #ifndef SIMS_EDITION
  DSRRenderer *renderer=dsr_gl_create(bin); if(!renderer) return 1;
+ #endif
  DsrShmHeader *h=mmap(NULL,DSR_SHM_SIZE,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0); if(h==MAP_FAILED) { perror("command ring"); return 1; }
  h->magic=DSR_SHM_MAGIC; h->version=1; uint8_t *ring=(uint8_t *)h+DSR_HEADER_SIZE;
- dsr_gl_readback(renderer,(uint8_t *)h+DSR_READBACK_OFFSET,DSR_READBACK_SIZE,&h->readback_done); dsr_gl_queries(renderer,(volatile uint32_t *)((uint8_t *)h+DSR_QUERY_OFFSET)); dsr_attach_consumer(h);
+ #ifndef SIMS_EDITION
+ dsr_gl_readback(renderer,(uint8_t *)h+DSR_READBACK_OFFSET,DSR_READBACK_SIZE,&h->readback_done); dsr_gl_queries(renderer,(volatile uint32_t *)((uint8_t *)h+DSR_QUERY_OFFSET));
+ #endif
+ dsr_attach_consumer(h);
  w32_host_window_created=window_created; w32_host_window_changed=window_changed;
  if(w32_prepare(exe,game,drive,overlay)) return 1;
  { void w32_lab_init(const char *); w32_lab_init(data); }
@@ -404,6 +433,16 @@ int main(int argc,char **argv) {
  DSFrameTrace trace={0}; ds_trace_init(&trace);
  DSFramePacer pacer={0}; ds_pacer_init(&pacer,atof(getenv("DSR_FPSCAP")),w32_screen_hz,SDL_GL_GetSwapInterval()!=0);
  double stop=getenv("DS_EXIT_AFTER")?atof(getenv("DS_EXIT_AFTER")):0;
+#ifdef SIMS_EDITION
+ (void)ring; (void)read; (void)last; (void)pacer; (void)trace;
+ while(game_running&&!quit&&!interrupted) {                       /* the game presents; this thread is input */
+  if(!events()) break; w32_crash_heartbeat(2);
+  if(stop>0 && (ds_clock_ns()-start)/1e9>=stop) break;
+  uint32_t f=__atomic_load_n(&sims_frames,__ATOMIC_ACQUIRE);
+  if(f!=frames) { frames=f; if(test_mode) { const char *shot=script_tick(frames); (void)shot; } }
+  SDL_WaitEventTimeout(NULL,2);
+ }
+#else
  while(game_running&&!quit&&!interrupted) {
   if(!events()) break; w32_crash_heartbeat(2);
   if(stop>0 && (ds_clock_ns()-start)/1e9>=stop) break;
@@ -447,6 +486,7 @@ int main(int argc,char **argv) {
    __atomic_store_n(&h->consumer_waiting,0,__ATOMIC_SEQ_CST);
   }
  }
+#endif
  SDL_SetRelativeMouseMode(SDL_FALSE);
  ds_trace_save(&trace);
  /* Guest service threads share the renderer and address space until process exit. */
