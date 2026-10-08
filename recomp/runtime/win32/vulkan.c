@@ -358,6 +358,7 @@ IMPL(vulkan_1, vkAllocateMemory)                                        /* (devi
                                        if (g) { e->guest = g; e->gsize = gsize; e->placed = 2; } }
         pthread_mutex_unlock(&mem_m);
         if (!e) fprintf(stderr, "vulkan: too many allocations to track\n");
+        if (vk_trace) fprintf(stderr, "vulkan: memory %#llx: %llu bytes, type %u%s\n", (unsigned long long)m, (unsigned long long)ai.allocationSize, ai.memoryTypeIndex, g ? ", imported" : "");
         rt_w64(G_MEM, ARG(3), (uint64_t)m);
     }
     VK_TRACE("vkAllocateMemory", r); RET(r, 4);

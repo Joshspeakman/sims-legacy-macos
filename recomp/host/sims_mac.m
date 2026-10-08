@@ -216,16 +216,16 @@ static void cmdfile_poll(uint32_t fno)
     }
     fclose(f);
 }
-static void script_tick(uint32_t fno)                     // on the game thread, once per presented frame
+static void script_tick(uint32_t fno)                     // on the game thread, once per presented frame (no AppKit here: buttons, not mk())
 {
     pthread_mutex_lock(&act_m);
     cmdfile_poll(fno);
     for (int k = 0; k < nacts; k++) {
         Act *a = &acts[k];
-        if (!strcmp(a->kind, "move") && fno == a->frame) { w32_set_cursor(a->x, a->y); post(0x200, mk(), pos_lp()); }
+        if (!strcmp(a->kind, "move") && fno == a->frame) { w32_set_cursor(a->x, a->y); post(0x200, buttons, pos_lp()); }
         else if (!strcmp(a->kind, "click") || !strcmp(a->kind, "rclick")) {
             int r = a->kind[0] == 'r';
-            if (fno == a->frame) { w32_set_cursor(a->x, a->y); post(0x200, mk(), pos_lp()); }
+            if (fno == a->frame) { w32_set_cursor(a->x, a->y); post(0x200, buttons, pos_lp()); }
             if (fno == a->frame + 20) { w32_keys[r ? 2 : 1] = 0x80; post(r ? 0x204 : 0x201, r ? 2 : 1, pos_lp()); }
             if (fno == a->frame + 24) { w32_keys[r ? 2 : 1] = 0; post(r ? 0x205 : 0x202, 0, pos_lp()); }
         } else if (!strcmp(a->kind, "key")) {

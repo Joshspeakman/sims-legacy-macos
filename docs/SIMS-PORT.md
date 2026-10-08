@@ -55,6 +55,9 @@ first the device offers (`W32_VK_MAP=placed|import|shadow` chooses):
   with `vm_alloc`; unmapping keeps the range reserved (`VK_MEMORY_UNMAP_RESERVE_BIT_EXT`) and gives it back.
 - *import* (`VK_EXT_external_memory_host`, MoltenVK): host-visible allocations are made in guest pages and imported;
   a memory type that can't import is swapped for a host-visible coherent one that can (NVIDIA's resizable-BAR type).
+  Safe on Metal because the game only binds buffers to host-visible memory: in a traced run its 4 imported
+  allocations (32, 32, 64, 128 MB) back buffers only, and its images live in separate device-local memory fed by
+  `vkCmdCopyBufferToImage` (Metal can't put an optimally tiled texture in an imported buffer).
 - *shadow*: the guest gets a copy, written to the device before every submission and at flushes, read back at
   invalidations and (host-cached memory) after waits. The game's two persistent 32 MB buffers make this 64 MB per
   submission, about three a frame: a fallback only.
