@@ -100,6 +100,21 @@ void vk_unknown_stype(uint32_t stype)
     fprintf(stderr, "vulkan: structure type %u in a pNext chain is not converted: left out\n", stype);
 }
 
+/* ---- formats: Apple GPUs have no 24-bit depth with stencil (MoltenVK reports D24_UNORM_S8_UINT unsupported); a game
+ * written for PC GPUs may use it without asking, so every format in a converted structure passes through here ---- */
+static VkPhysicalDevice format_pd;                      /* the device's physical device (vkCreateDevice) */
+VkFormat vk_fix_format(VkFormat f)
+{
+    static uint32_t seen[64]; static int nseen;
+    if (vk_trace) { int k = 0; while (k < nseen && seen[k] != (uint32_t)f) k++; if (k == nseen && nseen < 64) { seen[nseen++] = f; fprintf(stderr, "vulkan: format %d used\n", f); } }
+    if ((f != VK_FORMAT_D24_UNORM_S8_UINT && f != VK_FORMAT_X8_D24_UNORM_PACK32) || !format_pd) return f;
+    static int ok = -1;
+    if (ok < 0) { VkFormatProperties fp; vkp.vkGetPhysicalDeviceFormatProperties(format_pd, f, &fp); ok = (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0;
+                  if (!ok || getenv("W32_VK_NO_D24")) { ok = 0; fprintf(stderr, "vulkan: format %d unsupported here: D32_SFLOAT%s instead\n", f, f == VK_FORMAT_D24_UNORM_S8_UINT ? "_S8_UINT" : ""); } }
+    if (ok) return f;
+    return f == VK_FORMAT_D24_UNORM_S8_UINT ? VK_FORMAT_D32_SFLOAT_S8_UINT : VK_FORMAT_D32_SFLOAT;
+}
+
 /* ---- proc addresses ---- */
 static uint32_t proc(const char *name)
 {
@@ -248,10 +263,16 @@ IMPL(vulkan_1, vkCreateDevice)                                          /* (pd, 
     int import = !placed && (!mode || !strcmp(mode, "import")) && dev_has_ext(pd, "VK_EXT_external_memory_host") && vkp.vkGetPhysicalDeviceProperties2;
     if (import) { if (!has_name(ext, n, "VK_KHR_external_memory")) ext[n++] = "VK_KHR_external_memory"; ext[n++] = "VK_EXT_external_memory_host"; }
     ci.ppEnabledExtensionNames = ext; ci.enabledExtensionCount = n; ci.enabledLayerCount = 0; ci.ppEnabledLayerNames = 0;
+    if (vk_trace) {
+        for (uint32_t k = 0; k < n; k++) fprintf(stderr, "vulkan: device extension %s\n", ext[k]);
+        if (want) { const VkBool32 *w = (const VkBool32 *)want; for (unsigned k = 0; k < sizeof *want / sizeof *w; k++) if (w[k]) fprintf(stderr, "vulkan: device feature %u asked for\n", k); }
+        for (const VkBaseInStructure *c = ci.pNext; c; c = c->pNext) fprintf(stderr, "vulkan: device create chain sType %d\n", c->sType);
+    }
     VkDevice d = 0; VkResult r = vkp.vkCreateDevice(pd, &ci, 0, &d);
     vk_arena_free(&a);
     VK_TRACE("vkCreateDevice", r);
     if (r == VK_SUCCESS && ndevs < 8) {
+        format_pd = pd;
         DevInfo *di = &devs[ndevs++]; di->dev = d; di->pd = pd; di->placed = placed; di->place_align = 4096; di->import = import; di->import_align = 4096;
         if (import) {
             VkPhysicalDeviceExternalMemoryHostPropertiesEXT hp = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT};

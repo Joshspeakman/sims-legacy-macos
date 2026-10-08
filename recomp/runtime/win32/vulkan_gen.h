@@ -123,6 +123,8 @@ extern struct VkHostProcs vkp;
 extern const char *const vk_proc_names[];
 void cin_VkApplicationInfo(VkArena *a, uint32_t g, VkApplicationInfo *h);
 void cout_VkApplicationInfo(uint32_t g, const VkApplicationInfo *h);
+void cin_VkAttachmentDescription(VkArena *a, uint32_t g, VkAttachmentDescription *h);
+void cout_VkAttachmentDescription(uint32_t g, const VkAttachmentDescription *h);
 void cin_VkBindBufferMemoryInfo(VkArena *a, uint32_t g, VkBindBufferMemoryInfo *h);
 void cout_VkBindBufferMemoryInfo(uint32_t g, const VkBindBufferMemoryInfo *h);
 void cin_VkBindImageMemoryInfo(VkArena *a, uint32_t g, VkBindImageMemoryInfo *h);
