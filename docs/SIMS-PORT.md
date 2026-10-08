@@ -33,6 +33,9 @@ Data: the first run copies `TemplateUserData` to `Saved Games\Electronic Arts\Th
   `vulkan_commands.txt`: `python3 recomp/tools/gen_vulkan.py recomp/third_party/vulkan/registry/vk.xml
   recomp/runtime/win32/vulkan_commands.txt recomp/runtime/win32/vulkan_gen.c`); `runtime/win32/vulkan.c`;
   `runtime/win32/vulkan_rt.h`; headers and registry in `third_party/vulkan` (vulkan-sdk-1.4.341.0).
+- `recomp/host/sims_mac.m`, `recomp/tools/build_mac_sims.sh`, `install.sh`: the Mac app (see below).
+- `recomp/tools/sims_session.sh`: a long test-mode run driven from outside (`start`, `cmd "click:x,y"`, `shot NAME`,
+  `stop`; `SESSION=`, `DATA=`, `SIMS_BUILD=`); `recomp/tests/sims_smoke.py`: a first check of a build.
 - `recomp/host/linux.c` under `SIMS_EDITION`: Vulkan window, `w32_host_vk_*` hooks (loader, surface extensions,
   surface, presented), absolute cursor, an event loop instead of the DSR command ring.
 
@@ -45,52 +48,72 @@ same layout on both sides and are used in place in guest memory (41 of 104); the
 arena. Dispatchable handles are 16-byte guest allocations mapped to host pointers. Strings, scalar arrays and blittable
 arrays are passed as pointers into guest memory. Unknown `pNext` structures are logged once and left out.
 
-**Mapped memory.** Each allocation is mapped whole the first time and stays mapped. With `VK_EXT_map_memory_placed`
-(NVIDIA on Linux has it) the driver maps it at a guest address reserved with `vm_alloc`; unmapping keeps the range
-reserved (`VK_MEMORY_UNMAP_RESERVE_BIT_EXT`) and gives it back to the guest. Without it (`W32_VK_SHADOW=1` forces
-this; expected on MoltenVK) the guest gets a copy: written to the device memory before every `vkQueueSubmit` and at
-flushes; read back at invalidations, and for host-cached memory after successful fence/queue/device waits. The game
-never reads GPU results back in what's been seen so far (no `vkCmdCopyImageToBuffer`).
+**Mapped memory.** Each allocation is mapped whole the first time and stays mapped; the game never flushes (it
+relies on coherent memory), so the guest must see the device memory itself or a copy kept in step. Three ways, the
+first the device offers (`W32_VK_MAP=placed|import|shadow` chooses):
+- *placed* (`VK_EXT_map_memory_placed`, NVIDIA on Linux): the driver maps the allocation at a guest address reserved
+  with `vm_alloc`; unmapping keeps the range reserved (`VK_MEMORY_UNMAP_RESERVE_BIT_EXT`) and gives it back.
+- *import* (`VK_EXT_external_memory_host`, MoltenVK): host-visible allocations are made in guest pages and imported;
+  a memory type that can't import is swapped for a host-visible coherent one that can (NVIDIA's resizable-BAR type).
+- *shadow*: the guest gets a copy, written to the device before every submission and at flushes, read back at
+  invalidations and (host-cached memory) after waits. The game's two persistent 32 MB buffers make this 64 MB per
+  submission, about three a frame: a fallback only.
 
 **Instance and device.** `vkCreateInstance` swaps `VK_KHR_win32_surface` for the host's surface extensions (SDL on
 Linux), adds portability enumeration where present (MoltenVK), raises the API version to 1.1 and drops unavailable
 extensions and layers. `vkCreateDevice` drops unavailable extensions and features (logged) and adds
 `VK_KHR_map_memory2` + `VK_EXT_map_memory_placed` when available, and `VK_KHR_portability_subset` on MoltenVK.
 
-## Verified (2026-10-07, Linux, RTX 3080 Ti, NVIDIA 615)
+## Verified on Linux (2026-10-07, RTX 3080 Ti, NVIDIA 615)
 
-- Start-up through Steam, CPU detection, locale, window, Vulkan device ("mapped memory placed in guest memory"),
-  swapchain 1024×768 B8G8R8A8_UNORM FIFO.
-- First run: the template user data copies completely; the neighbourhood screen draws with all its houses.
-- The family button opens Select a Family (portraits drawn) with its "Create a Family?" dialog.
-- Clicking a lot in the neighbourhood opens it: an empty lot (build grid, the live/build/buy panel, "Paused", the cab
-  company notice) and an occupied one (house with pool, fences, flower beds; the Magic Town notice).
-- Runs reach the test timeout (60–100 s) without game faults (the host's teardown on the kill is item 5 below).
+- Start-up through Steam, CPU detection, locale, window, Vulkan device and swapchain (1024×768 B8G8R8A8_UNORM, FIFO).
+- First run: the template user data copies completely; the neighbourhood draws with all its houses; lot tooltips.
+- Select a Family, Create a Family and Create a Sim (typing names, the 3D Sim turning, outfits and heads changing).
+- Lots: empty and furnished ones open; the game's notices; save from the options panel (the house file is written);
+  back to the neighbourhood; moving a family into a lot (Purchase House).
+- Live mode: Sims walking and running, pie menus (Go Here), reading the paper, visitors with dogs, time passing,
+  day turning to night; buy mode (catalogue, a chair bought and placed for §80).
+- Sound: music through DirectSound matches an independent decode of the same MP3 (correlation 0.97–0.99, no drift).
+- A 40-minute soak at the fastest speed with a family of four: no faults, about 47 frames a second (hidden window),
+  the game thread using about half a core, 500 MB resident.
+- All three mapped-memory modes render: placed (default here), imported (`W32_VK_MAP=import`, MoltenVK's), shadowed.
+- What the game needs from Vulkan: `VK_KHR_swapchain`, no optional features, formats D32_SFLOAT, B8G8R8A8_UNORM,
+  R8_UNORM (all on Apple GPUs; D24S8 would be swapped by `vk_fix_format`).
+- `recomp/tests/sims_smoke.py` passes (fresh data folder → neighbourhood in 80 s).
 
-## Not working / next steps
+## The Mac: what's ready, and the first session there
 
-1. **Live mode.** Dismiss the notices and let a family play: Sims (3D characters) walking, needs, objects in use,
-   time passing; then build and buy mode. One oddity: clicks on the marked Newbie house's roof (700,338 in the
-   1024×768 test window) do nothing while other lots open; the hover tooltip never appears in shots either (the
-   system cursor isn't in the swapchain). The real-window mouse path (absolute SDL coordinates) is written but has
-   only been exercised through the test script.
-2. **Sound.** DirectSound comes from the shared runtime; tests run with `W32_AUDIO_MUTE`. Check with `W32_AUDIOLOG=1`
-   that music and effects reach the mixer.
-3. **The Mac host** (`recomp/host/main.m`, `build_runtime.sh` on Darwin): a Vulkan path like Linux's: MoltenVK
-   (bundle `libMoltenVK.dylib` in the app, or fetch it at install; it exports `vkGetInstanceProcAddr`), a
-   `CAMetalLayer` view and `VK_EXT_metal_surface` for `w32_host_vk_surface`, `w32_host_vk_extensions` returning
-   `VK_KHR_surface` + `VK_EXT_metal_surface`. Check whether MoltenVK offers `VK_EXT_map_memory_placed`; if not, the
-   shadow path is used. `-I third_party/vulkan/include` for the runtime, `-lz` for screenshots. 64-bit atomics on
-   arm64 need 8-byte alignment (`lock cmpxchg8b`). Diff `host/main.m` and `src/renderer/renderer.m` against
-   `fallout-nv-macos` first: this tree's Mac files may be behind.
-4. **Installer and launcher.** `install.sh` and the Linux launcher are still Dungeon Siege II's / Fallout NV's: find
-   the Steam folder (libraryfolders.vdf), run `build_sims.sh`, install the app and a data folder.
-5. **Exit.** Killing the host while the game runs segfaults in teardown (the Vulkan device is still live).
-6. **Remaining imports** (`python3 recomp/tools/import_gap.py recomp/work/sims/Sims.exe`): 58, mostly unused by
-   what's been run (threadpool timers/waits, named pipes, MSVFW32 video codecs, OLEAUT32 variants, font
-   enumeration). Implement as they're reached; each stops with its name.
-7. **Lifter gaps** (stop with their address if ever reached): SSSE3/SSE4.1 (`pshufb`, `pmulld`, `pblendvb`, ...)
-   and AVX in CPU-dispatched paths, `enter` with nesting, segment registers in junk decodes.
+Written on Linux and **not compiled yet** (no Mac here): `recomp/host/sims_mac.m` (AppKit window, CAMetalLayer,
+MoltenVK loader and `VK_EXT_metal_surface`, absolute mouse, keyboard, crash reports, `launch.plist`, test scripts),
+`recomp/tools/build_mac_sims.sh` (runtime + host → `recomp/work/sims/app/SimsNative`, chosen by `build_runtime.sh`
+on Darwin) and `install.sh` (finds the game or downloads it with SteamCMD, needs `brew install molten-vk`, installs
+`~/Applications/The Sims Legacy Native.app` with MoltenVK inside). MoltenVK offers `VK_EXT_external_memory_host`
+(its user guide), so the zero-copy *import* mode should be what the Mac gets; it was tested on Linux.
+
+1. `brew install molten-vk`; get the game folder (copied from a PC or a CrossOver/Whisky Steam library, or
+   `./install.sh --steamcmd <user>`).
+2. `recomp/build_sims.sh "<game>/Sims.exe"`: lifting is the same as on Linux; compiling the lifted C for arm64 has
+   worked for the other ports. Fix what `build_mac_sims.sh` / `sims_mac.m` don't compile (expected: small things).
+3. `python3 recomp/tests/sims_smoke.py recomp/work/sims/app/SimsNative recomp/work/sims/Sims.exe "<game>"`.
+4. Check the log for `mapped memory imported from guest memory`; if it says shadowed, see why (W32_VKLOG=1).
+5. Drive it (DS_CMDFILE with move/click/key/shot lines, as `recomp/tools/sims_session.sh` does on Linux), then play
+   it for real: full screen, the system cursor, keyboard shortcuts, Retina (the game renders at the screen's size
+   in points; `DS_RESOLUTION=WxH` to try others).
+6. `./install.sh`, open the app.
+
+## Not done / next steps
+
+1. **The Mac session above.**
+2. The game's own animated cursors (`LoadCursorFromFileA` of `.ani` files) show as the system arrow.
+3. A launch window (resolution, full screen or windowed) like the other ports'.
+4. **Remaining imports** (`python3 recomp/tools/import_gap.py recomp/work/sims/Sims.exe`): 58, none reached in
+   what's been played (threadpool timers/waits, named pipes, MSVFW32 video codecs, OLEAUT32 variants, font
+   enumeration). Each stops with its name if reached.
+5. **Lifter gaps** (stop with their address if reached): SSSE3/SSE4.1 and AVX in CPU-dispatched paths (the runtime
+   reports an SSE2 CPU, so they aren't taken), `enter` with nesting, segment registers in junk decodes.
+6. Not yet tried: build mode walls and floors, Downtown / Vacation / Studio Town and the other expansion
+   destinations, pets, a whole Sim life (jobs, skills, ageing via the expansions).
+7. The marked Newbie house's roof (700,338 in the test window) doesn't open its lot; other lots do.
 
 ## Ground rules
 
