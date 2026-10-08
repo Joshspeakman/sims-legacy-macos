@@ -498,5 +498,8 @@ int main(int argc,char **argv) {
  ds_trace_save(&trace);
  /* Guest service threads share the renderer and address space until process exit. */
  fprintf(stderr,"host: %u frames presented\n",frames);
+#ifdef SIMS_EDITION
+ fflush(stderr); _exit(game_running?0:(int)game_code);   /* no teardown: the game's threads and its Vulkan device are still live */
+#endif
  return game_running?0:(int)game_code;
 }

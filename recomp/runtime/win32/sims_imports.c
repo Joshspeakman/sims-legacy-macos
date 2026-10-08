@@ -452,7 +452,12 @@ static void mm_timer_run(Ctx *c, void *arg)
     do {
         uint64_t ns = (uint64_t)next.tv_nsec + (uint64_t)t->delay * 1000000u;
         next.tv_sec += (time_t)(ns / 1000000000u); next.tv_nsec = (long)(ns % 1000000000u);
-        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, 0);
+        for (;;) {                                                     /* until `next` (macOS has no clock_nanosleep) */
+            struct timespec now; clock_gettime(CLOCK_MONOTONIC, &now);
+            int64_t ns = (int64_t)(next.tv_sec - now.tv_sec) * 1000000000 + (next.tv_nsec - now.tv_nsec);
+            if (ns <= 0) break;
+            struct timespec d = {(time_t)(ns / 1000000000), (long)(ns % 1000000000)}; nanosleep(&d, 0);
+        }
         if (t->killed) break;
         if (t->flags & 0x30) w32_event_signal(t->fn, 1);              /* TIME_CALLBACK_EVENT_SET / _PULSE */
         else { uint32_t a[5] = {t->id, 0, t->user, 0, 0}; w32_callback(c, t->fn, 5, a); }
