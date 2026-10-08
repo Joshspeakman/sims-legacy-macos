@@ -220,7 +220,7 @@ static void motion_tick(void)
 {
     if (!mot_home) return;
     vcur_x = mot_dx; vcur_y = mot_dy; w32_set_cursor(mot_dx, mot_dy);
-    post(0x200, 0, ((uint32_t)mot_dy << 16) | ((uint32_t)mot_dx & 0xffff));
+    post(0x200, mk(), ((uint32_t)mot_dy << 16) | ((uint32_t)mot_dx & 0xffff));
     mot_home = mot_dx = mot_dy = mot_pending = 0;
 }
 /* "type" action follows the same Windows key/character event path as SDL input. */
@@ -266,6 +266,12 @@ static const char *script_tick(uint32_t fno)       /* returns a screenshot path 
             if (a->phase==2 && fno == a->frame + 4) { w32_keys[r ? 2 : 1] = 0; post(r ? 0x205 : 0x202, 0, pos_lp()); a->phase=3; }
         } else if (!strcmp(a->kind, "lag") && fno == a->frame) { void dp8_set_lag(int, int); dp8_set_lag(a->x, a->y); }
         else if (!strcmp(a->kind, "move") && fno == a->frame) { mot_home = 8; mot_dx = a->x; mot_dy = a->y; }
+        else if (!strcmp(a->kind, "close") && fno == a->frame) post(0x10, 0, 0);   /* close: WM_CLOSE, as Cmd-Q / the window's close */
+        else if ((!strcmp(a->kind, "down") || !strcmp(a->kind, "up")) && fno == a->frame) {   /* down:x,y / up:x,y: drags */
+            int dn = a->kind[0] == 'd'; vcur_x = a->x; vcur_y = a->y; w32_set_cursor(a->x, a->y);
+            if (dn) { buttons |= 1; w32_keys[1] = 0x80; } else { buttons &= ~1u; w32_keys[1] = 0; }
+            post(0x200, mk(), pos_lp()); post(dn ? 0x201 : 0x202, mk(), pos_lp());
+        }
         else if (!strcmp(a->kind, "rel") && fno >= a->frame && fno < a->frame + 60) rel_motion(a->x / 60.0, a->y / 60.0);   /* x,y over 60 frames, like a trackpad swipe */
         else if (!strcmp(a->kind, "key")) {
             if (fno == a->frame) { w32_keys[a->x & 0xff] = 0x80; post(0x100, (uint32_t)a->x, 1); }

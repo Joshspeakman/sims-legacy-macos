@@ -557,3 +557,22 @@ IMPL(kernel32, GetFinalPathNameByHandleW)                              /* (handl
     if ((uint32_t)n > ARG(2)) RET((uint32_t)n, 4);
     w32_mb_to_wide(0, (const uint8_t *)full, -1, (uint16_t *)GP(ARG(1)), (int)ARG(2)); RET((uint32_t)n - 1, 4);
 }
+
+/* ---- oleaut32 by ordinal: VARIANTs (16 bytes: vt, three reserved words, the value) and error info, for the WMI query
+ * the game makes at start-up and releases when it quits ---- */
+IMPL(oleaut32, ord8) { memset(GP(ARG(0)), 0, 16); RET(0, 1); }                     /* VariantInit */
+IMPL(oleaut32, ord9)                                                               /* VariantClear */
+{
+    uint32_t v = ARG(0); uint16_t vt = (uint16_t)rt_r16(G_MEM, v);
+    if (vt == 8 && rt_r32(G_MEM, v + 8)) heap_free(w32_process_heap, rt_r32(G_MEM, v + 8) - 4);   /* VT_BSTR */
+    memset(GP(v), 0, 16); RET(0, 1);
+}
+IMPL(oleaut32, ord12)                                                              /* VariantChangeType(dst, src, flags, vt) */
+{
+    uint32_t d = ARG(0), s = ARG(1); uint16_t want = (uint16_t)ARG(3), have = (uint16_t)rt_r16(G_MEM, s);
+    if (want == have && have != 8) { if (d != s) memcpy(GP(d), GP(s), 16); RET(0, 4); }
+    RET(0x80020005u, 4);                                                           /* DISP_E_TYPEMISMATCH */
+}
+IMPL(oleaut32, ord200) { if (ARG(1)) rt_w32(G_MEM, ARG(1), 0); RET(1, 2); }       /* GetErrorInfo: none (S_FALSE) */
+IMPL(oleaut32, ord201) { RET(0, 2); }                                              /* SetErrorInfo */
+IMPL(oleaut32, ord202) { if (ARG(0)) rt_w32(G_MEM, ARG(0), 0); RET(0x80004001u, 1); }   /* CreateErrorInfo: E_NOTIMPL */
