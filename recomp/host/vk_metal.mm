@@ -27,6 +27,7 @@
 #include <vulkan/vulkan.h>
 #include <pthread.h>
 #include <time.h>
+#include <unistd.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -870,8 +871,38 @@ static void encode(Enc &e, VkCommandBuffer_T *cb)
     }
     e.end_render(); e.end_blit();
 }
+/* development: VKM_TRACE_AT=<frame> (or VKM_TRACE_ON=<file>) prints the commands submitted for that presented frame (render passes and their
+ * targets, pipelines, draws, the textures bound, copies), to see how the game builds a frame */
+static uint32_t presented;
+static void trace(VkCommandBuffer_T *cb)
+{
+    static long at = -2; if (at == -2) at = getenv("VKM_TRACE_AT") ? atol(getenv("VKM_TRACE_AT")) : -1;
+    const char *on = getenv("VKM_TRACE_ON");                  /* or the frame after this file appears (it is removed) */
+    if (on && !access(on, F_OK)) { unlink(on); at = presented + 1; fprintf(stderr, "vkm: trace of frame %ld\n", at); }
+    if (at < 0 || presented != (uint32_t)at) return;
+    auto tx = [](VkImageView_T *v) { static char b[64]; if (!v || !v->img) return "-"; snprintf(b, sizeof b, "%ux%u%s%s", v->img->ci.extent.width, v->img->ci.extent.height,
+              v->img->swap ? " swap" : "", (v->img->ci.usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) ? " rt" : ""); return (const char *)b; };
+    int draws = 0, prims = 0; void *pipe = 0;
+    auto flush = [&]() { if (draws) fprintf(stderr, "    pipe %p: %d draws, %d vertices\n", pipe, draws, prims); draws = prims = 0; };
+    for (Cmd &c : cb->cmds) switch (c.op) {
+    case BEGIN_RP: { flush(); VkRenderPass_T *rp = (VkRenderPass_T *)c.p[0]; VkFramebuffer_T *fb = (VkFramebuffer_T *)c.p[1];
+        fprintf(stderr, "  pass %ux%u color %s load %d%s\n", fb->w, fb->h, rp->color >= 0 ? tx(fb->a[rp->color]) : "-", rp->color >= 0 ? rp->a[rp->color].loadOp : -1, rp->depth >= 0 ? " +depth" : ""); break; }
+    case END_RP: flush(); break;
+    case BIND_PIPE: if (c.p[0] != pipe) { flush(); pipe = c.p[0]; } break;
+    case BIND_SETS: { VkDescriptorSet_T *ds = (VkDescriptorSet_T *)c.p[0]; if (ds && ds->view[0] && ds->view[0]->img && (ds->view[0]->img->ci.usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)) { flush(); fprintf(stderr, "    samples %s (set %u)\n", tx(ds->view[0]), c.a[0]); } break; }
+    case VIEWPORT: flush(); fprintf(stderr, "    viewport %.0f,%.0f %.0fx%.0f\n", c.f[0], c.f[1], c.f[2], c.f[3]); break;
+    case DRAW: draws++; prims += c.a[0] * c.a[1]; break;
+    case DRAW_IDX: draws++; prims += c.a[0] * c.a[1]; break;
+    case BLIT: flush(); fprintf(stderr, "  blit %ux%u -> %ux%u\n", ((VkImage_T *)c.p[0])->ci.extent.width, ((VkImage_T *)c.p[0])->ci.extent.height, ((VkImage_T *)c.p[1])->ci.extent.width, ((VkImage_T *)c.p[1])->ci.extent.height); break;
+    case COPY_B2I: flush(); fprintf(stderr, "  upload to %ux%u\n", ((VkImage_T *)c.p[1])->ci.extent.width, ((VkImage_T *)c.p[1])->ci.extent.height); break;
+    case COPY_I2B: flush(); fprintf(stderr, "  readback %ux%u\n", ((VkImage_T *)c.p[0])->ci.extent.width, ((VkImage_T *)c.p[0])->ci.extent.height); break;
+    default: break;
+    }
+    flush();
+}
 static VkResult VKAPI_CALL vkm_QueueSubmit(VkQueue q, uint32_t n, const VkSubmitInfo *si, VkFence fence)
 {
+    for (uint32_t k = 0; k < n; k++) for (uint32_t j = 0; j < si[k].commandBufferCount; j++) trace(si[k].pCommandBuffers[j]);
     VkDevice_T *d = q->d; id<MTLCommandBuffer> last = nil;
     @autoreleasepool {
         for (uint32_t k = 0; k < n; k++) {
@@ -932,6 +963,7 @@ static void pace(void)
 }
 static VkResult VKAPI_CALL vkm_QueuePresentKHR(VkQueue q, const VkPresentInfoKHR *pi)
 {
+    presented++;
     VkDevice_T *d = q->d;
     @autoreleasepool {
         for (uint32_t k = 0; k < pi->swapchainCount; k++) {

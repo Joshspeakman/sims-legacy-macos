@@ -150,6 +150,13 @@ static void key_event(uint16_t code, int down, int repeat)
     NSPoint p = [self convertPoint:e.locationInWindow fromView:nil]; NSSize s = self.bounds.size;
     if (s.width < 1 || s.height < 1) return;
     int x = (int)(p.x * w32_screen_w / s.width), y = (int)((s.height - p.y) * w32_screen_h / s.height);
+    /* edge scrolling: the game scrolls only with the cursor in its outermost 3 pixels (under 2 points on a Retina
+     * screen), so within SIMS_EDGE points of an edge (8; 0 = the game's own) the cursor is put on the edge itself */
+    static double band = -1; if (band < 0) { const char *e = getenv("SIMS_EDGE"); band = e ? atof(e) : 8; if (band < 0) band = 0; }
+    if (band > 0) {
+        if (p.x < band) x = 0; else if (p.x > s.width - band) x = w32_screen_w - 1;
+        if (p.y < band) y = w32_screen_h - 1; else if (p.y > s.height - band) y = 0;
+    }
     if (x < 0) x = 0; if (y < 0) y = 0; if (x >= w32_screen_w) x = w32_screen_w - 1; if (y >= w32_screen_h) y = w32_screen_h - 1;
     w32_set_cursor(x, y); post(0x200, mk(), pos_lp());
 }
@@ -167,6 +174,16 @@ static void key_event(uint16_t code, int down, int repeat)
 {
     static double acc; acc += e.hasPreciseScrollingDeltas ? e.scrollingDeltaY / 10.0 : e.scrollingDeltaY;
     while (acc >= 1 || acc <= -1) { int d = acc > 0 ? 1 : -1; acc -= d; post(0x20a, ((uint32_t)(int16_t)(120 * d) << 16) | mk(), pos_lp()); }
+}
+/* trackpad pinch: the game's own zoom steps, as its mouse wheel gives them (a notch away from you zooms in);
+ * SIMS_PINCH=0 turns it off */
+- (void)magnifyWithEvent:(NSEvent *)e
+{
+    static double acc; static int off = -1; if (off < 0) off = getenv("SIMS_PINCH") && !atoi(getenv("SIMS_PINCH"));
+    if (off) return;
+    if (e.phase == NSEventPhaseBegan) acc = 0;
+    acc += e.magnification;
+    while (acc >= 0.2 || acc <= -0.2) { int d = acc > 0 ? 1 : -1; acc -= 0.2 * d; post(0x20a, ((uint32_t)(int16_t)(120 * d) << 16) | mk(), pos_lp()); }
 }
 - (void)keyDown:(NSEvent *)e
 {
@@ -237,6 +254,8 @@ static void script_tick(uint32_t fno)                     // on the game thread,
         } else if (!strcmp(a->kind, "key")) {
             if (fno == a->frame) { w32_keys[a->x & 0xff] = 0x80; post(0x100, (uint32_t)a->x, 1); }
             if (fno == a->frame + 3) { w32_keys[a->x & 0xff] = 0; post(0x101, (uint32_t)a->x, 0xc0000001u); }
+        } else if (!strcmp(a->kind, "wheel") && fno == a->frame) {          /* wheel:<notches>,0 (+ away from you) */
+            post(0x20a, ((uint32_t)(int16_t)(120 * a->x) << 16) | buttons, pos_lp());
         } else if (!strcmp(a->kind, "close") && fno == a->frame) { post(0x10, 0, 0);   /* WM_CLOSE, as Cmd-Q / the window's close */
         } else if (!strcmp(a->kind, "type") && fno == a->frame) {   /* each character as a key press and WM_CHAR, as host/linux.c */
             for (const unsigned char *p = (const unsigned char *)a->path; *p; p++) {
@@ -302,6 +321,38 @@ static void window_changed(uint32_t hwnd, int x, int y, int w, int h, int visibl
         }
         else if (!visible && win.visible) [win orderOut:nil];
     });
+}
+
+/* The game's screen, and the size it lays itself out at. The game draws at its screen's size, but lays out its
+ * interface and lot at screen / dpi, dpi an integer it takes from its -dpi switch, by default and at most height / 600
+ * (Sims.exe 0x6f2b77): the larger the layout, the smaller the interface and the more of the lot shows; the two are one
+ * setting in this game. The launch window's choices (environment):
+ *   SIMS_RESOLUTION  retina (the display's pixels: the default), display (its points), or WxH
+ *   SIMS_UI          interface size in percent of the game's own for that screen (100); another size gives the game a
+ *                    screen of (layout height x k) with -dpi:k (k as large as fits), scaled to the display by the layer
+ *   SIMS_WINDOWED=1  a window instead of full screen; SIMS_NOTCH=below  full screen under a notch
+ * Test mode: 1024x768. DS_RESOLUTION=WxH overrides the resolution. Also used by the launch window (launcher.m) for the
+ * game's resolution label, so the two always agree. dpi 0: the game's own. */
+void sims_screen(int test, int *w, int *h, int *dpi, double *scale, double *notch, int *win)
+{
+    NSScreen *scr = NSScreen.mainScreen; NSRect sf = scr.frame; double bs = scr.backingScaleFactor > 0 ? scr.backingScaleFactor : 1;
+    const char *res = getenv("SIMS_RESOLUTION"), *nt = getenv("SIMS_NOTCH"), *ui = getenv("SIMS_UI");
+    *win = getenv("SIMS_WINDOWED") && atoi(getenv("SIMS_WINDOWED")); *notch = 0; *scale = 1; *dpi = 0;
+    if (@available(macOS 12.0, *)) if (!*win && nt && !strcmp(nt, "below")) *notch = scr.safeAreaInsets.top;
+    double pw = sf.size.width, ph = sf.size.height - *notch; int rw, rh;
+    if (res && sscanf(res, "%dx%d", &rw, &rh) == 2 && rw >= 640 && rh >= 480) { *w = rw; *h = rh; }
+    else if (res && !strcmp(res, "display")) { *w = (int)pw; *h = (int)ph; }
+    else { *w = (int)(pw * bs); *h = (int)(ph * bs); *scale = bs; }
+    if (test) { *w = 1024; *h = 768; *scale = 1; }
+    const char *r = getenv("DS_RESOLUTION"); if (r && sscanf(r, "%dx%d", &rw, &rh) == 2 && rw >= 640 && rh >= 480) { *w = rw; *h = rh; }
+    *w &= ~1; *h &= ~1;
+    int pct = ui ? atoi(ui) : 100;
+    if (pct >= 20 && pct <= 300 && pct != 100 && *h >= 600) {
+        int k0 = *h / 600, lh = (int)((double)*h / k0 * 100 / pct + 0.5);   /* the layout height asked for */
+        if (lh < 600) lh = 600; if (lh > *h) lh = *h; lh &= ~1;
+        int k = *h / lh, gh = lh * k, gw = (int)((double)*w * gh / *h + 0.5) & ~1;
+        if (gh != *h || k != k0) { *w = gw; *h = gh; *dpi = k; }
+    }
 }
 
 @interface AppDelegate : NSObject <NSApplicationDelegate> @end
@@ -401,22 +452,13 @@ int main(int argc, char **argv)
                 }
             }
         }
-        /* The game's screen, which it renders at (its 4:3 picture fitted to the height, the interface with it). The launch
-         * window's choices: SIMS_RESOLUTION = retina (the display's pixels: sharpest, the default), display (its points,
-         * scaled up), or WxH; SIMS_WINDOWED=1 (a window instead of full screen); SIMS_NOTCH=below (full screen under a
-         * notch). Test mode: 1024x768. DS_RESOLUTION=WxH overrides any of them. */
         {
-            NSScreen *scr = NSScreen.mainScreen; NSRect sf = scr.frame; double bs = scr.backingScaleFactor > 0 ? scr.backingScaleFactor : 1;
-            const char *res = getenv("SIMS_RESOLUTION"), *nt = getenv("SIMS_NOTCH"); windowed = getenv("SIMS_WINDOWED") && atoi(getenv("SIMS_WINDOWED"));
-            if (@available(macOS 12.0, *)) if (!windowed && nt && !strcmp(nt, "below")) notch_inset = scr.safeAreaInsets.top;
-            double pw = sf.size.width, ph = sf.size.height - notch_inset; int rw, rh;
-            if (res && sscanf(res, "%dx%d", &rw, &rh) == 2 && rw >= 640 && rh >= 480) { w32_screen_w = rw; w32_screen_h = rh; }
-            else if (res && !strcmp(res, "display")) { w32_screen_w = (int)pw; w32_screen_h = (int)ph; }
-            else { w32_screen_w = (int)(pw * bs); w32_screen_h = (int)(ph * bs); layer_scale = bs; }
-            if (test_mode) { w32_screen_w = 1024; w32_screen_h = 768; layer_scale = 1; }
-            const char *r = getenv("DS_RESOLUTION"); if (r && sscanf(r, "%dx%d", &rw, &rh) == 2 && rw >= 640 && rh >= 480) { w32_screen_w = rw; w32_screen_h = rh; }
-            w32_screen_w &= ~1; w32_screen_h &= ~1;
-            fprintf(stderr, "SimsNative: the game's screen is %dx%d%s%s\n", w32_screen_w, w32_screen_h, windowed ? " (in a window)" : "", notch_inset > 0 ? " (below the notch)" : "");
+            int dpi; sims_screen(test_mode, &w32_screen_w, &w32_screen_h, &dpi, &layer_scale, &notch_inset, &windowed);
+            if (dpi) {                                                  /* the interface size: the game's own -dpi switch */
+                char a[512]; const char *x = getenv("DS_ARGS"); snprintf(a, sizeof a, "%s%s-dpi:%d", x ? x : "", x ? " " : "", dpi); setenv("DS_ARGS", a, 1);
+            }
+            fprintf(stderr, "SimsNative: the game's screen is %dx%d%s%s%s\n", w32_screen_w, w32_screen_h, dpi ? " " : "", dpi ? getenv("DS_ARGS") : "",
+                    windowed ? " (in a window)" : notch_inset > 0 ? " (below the notch)" : "");
         }
         w32_screen_scale = 1;
         init_keymap();
