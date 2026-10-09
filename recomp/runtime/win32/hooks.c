@@ -61,7 +61,7 @@ static int sims_default_resolution(Ctx *c)
 {
     static uint32_t mine; static int state;
     uint32_t p = rt_r32(G_MEM, c->esp);
-    if (!p || strcmp((const char *)GP(p), "1024x768 (4:3)")) return 0;
+    if (!readable(p) || strncmp((const char *)GP(p), "1024x768 (4:3)", 15)) return 0;
     if (!state) {
         const char *r = getenv("SIMS_GAME_RES"); state = 1; int w, h;
         if (r && sscanf(r, "%dx%d", &w, &h) == 2 && w >= 640 && h >= 480 && strlen(r) < 64) {
