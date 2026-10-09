@@ -97,6 +97,7 @@ git -C "\$REPO" worktree prune
 if [ -e "\$W/.git" ]; then git -C "\$W" checkout -q -f --detach "origin/\$BRANCH"
 else mkdir -p "\$REPO/build"; git -C "\$REPO" worktree add -q -f --detach "\$W" "origin/\$BRANCH"; fi
 echo "== \$BRANCH: \$(git -C "\$W" log -1 --format='%h %s')"
+[ -e "\$W/recomp/work" ] || { mkdir -p "\$REPO/recomp/work"; ln -s "\$REPO/recomp/work" "\$W/recomp/work"; }   # one build folder for the checkout and its updates
 exec "\$W/install.sh" --game-dir $Q_GAME --data-dir $Q_DATA --app-dir $(printf '%q' "$APPS") $U_ARGS
 UPDATE
   chmod +x "$A/Contents/MacOS/update"
