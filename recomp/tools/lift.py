@@ -827,6 +827,23 @@ def find_crashpad_init(L):
     both = found[0] & found[1]
     return min(both) if len(both) == 1 else 0
 
+def find_default_resolution(L):
+    """The Sims: each push of the default resolution "1024x768 (4:3)" (the options' constructor and reset, the reader of
+    older Options.iff files, a getter: 0x401264, 0x431f14, 0x43251c, 0x4325e7, 0x4335e0 in build 17905164). The hook
+    runs on the next instruction and gives the game the launch window's resolution instead (runtime/win32/hooks.c,
+    SIMS_GAME_RES); a resolution saved in Options.iff still wins."""
+    d = L.pe.data; sites = []
+    for m in re.finditer(re.escape(b'1024x768 (4:3)\0'), d):
+        if m.start() and d[m.start() - 1] != 0: continue
+        va = None
+        for n, sva, vs, ra, rs, fl in L.pe.sections:
+            if ra <= m.start() < ra + rs: va = sva + m.start() - ra
+        if va is None: continue
+        for r in re.finditer(re.escape(b'\x68' + struct.pack('<I', va)), d):
+            for n, sva, vs, ra, rs, fl in L.pe.sections:
+                if ra <= r.start() < ra + rs and fl & 0x20000000: sites.append(sva + r.start() - ra + 5)
+    return sites
+
 def find_except_handler4(path):
     """(_except_handler4, its __SEH_prolog4 helpers): each helper starts push _except_handler4; push fs:[0]. The Sims
     Legacy (MSVC 2022): 0x7af450, prologs 0x7a94e0 and 0x944940 (_GS)."""
@@ -861,6 +878,9 @@ def main():
             cp = find_crashpad_init(L)
             if cp: L.overrides = {cp: 'crash reporting (crashpad): not started'}
             else: print('warning: the crash-reporting set-up (minidump/binary_version) was not found; crashpad will stop the game')
+            res = find_default_resolution(L)
+            for va in res: L.hooks[va] = 'the default resolution: the launch window\'s'
+            if not res: print('warning: the default resolution ("1024x768 (4:3)") was not found; the game starts in 4:3')
         elif edition == 'broken-world':
             L.guest_flow = True
             L.hooks = dict(zip(PROFILES[edition]['hooks'], HOOKS.values()))

@@ -28,6 +28,7 @@ FAIL=0; for p in "${PIDS[@]}"; do wait "$p" || FAIL=1; done        # (bash 3.2: 
 BUILD="$(git -C "$ROOT" describe --always --dirty 2>/dev/null || echo unknown)"
 "$CC" -c -O2 -fobjc-arc -Wall -Wno-unused-function -DSIMS_EDITION -DDS_BUILD="\"$BUILD\"" -I "$HERE/runtime" \
   -I "$HERE/third_party/vulkan/include" -o "$OUT/obj/host/sims_mac.o" "$HERE/host/sims_mac.m"
+"$CC" -c -O2 -fobjc-arc -Wall -Wno-unused-function -o "$OUT/obj/host/launcher.o" "$HERE/host/launcher.m"   # the launch window
 # the game's Vulkan on Metal (host/vk_metal.mm), with SPIRV-Cross for its shaders (third_party/spirv-cross)
 mkdir -p "$OUT/obj/spirv-cross"; PIDS=()
 for f in spirv_cfg spirv_cross spirv_cross_parsed_ir spirv_glsl spirv_msl spirv_parser; do
@@ -38,7 +39,7 @@ done
   -c -o "$OUT/obj/host/vk_metal.o" "$HERE/host/vk_metal.mm" & PIDS+=($!)
 FAIL=0; for p in ${PIDS[@]+"${PIDS[@]}"}; do wait "$p" || FAIL=1; done
 [[ $FAIL == 0 ]] || { echo "build_mac_sims.sh: the Metal Vulkan or SPIRV-Cross failed to compile (above)"; exit 1; }
-"$CC" -o "$OUT/app/SimsNative" "$OUT"/obj/*.o "$OUT"/obj/rt/*.o "$OUT"/obj/rt/mojo/*.o "$OUT/obj/host/sims_mac.o" "$OUT/obj/host/vk_metal.o" "$OUT"/obj/spirv-cross/*.o -lc++ \
+"$CC" -o "$OUT/app/SimsNative" "$OUT"/obj/*.o "$OUT"/obj/rt/*.o "$OUT"/obj/rt/mojo/*.o "$OUT/obj/host/sims_mac.o" "$OUT/obj/host/launcher.o" "$OUT/obj/host/vk_metal.o" "$OUT"/obj/spirv-cross/*.o -lc++ \
   -framework AppKit -framework Metal -framework QuartzCore -framework CoreText -framework CoreGraphics -framework CoreFoundation \
   -framework AudioToolbox -lz
 echo "$OUT/app/SimsNative"
