@@ -1,5 +1,5 @@
 // SimsNative: the recompiled The Sims Legacy Collection as a native macOS app. The game runs on its own thread
-// (recompiled code + Win32 layer) and draws with Vulkan, which runtime/win32/vulkan.c hands to MoltenVK; this file
+// (recompiled code + Win32 layer) and draws with Vulkan, which runtime/win32/vulkan.c hands to host/vk_metal.mm (Vulkan on Metal); this file
 // provides the window (a CAMetalLayer the game's swapchain presents to), the Vulkan loader and surface, input (the
 // system cursor and keyboard -> Windows messages and key state), and crash reports.
 //   SimsNative --exe <unwrapped Sims.exe> --game <game folder> --data <folder for C: and saved files>
@@ -7,7 +7,6 @@
 // Test mode (DS_TEST=1): a 1024x768 background window, the game's screen is that size; DS_SCRIPT="800:click:x,y;..."
 // and DS_CMDFILE=<file> (move, click, rclick, key, shot lines) as on Linux (host/linux.c); W32_VK_SHOT as everywhere.
 //
-// NOTE (2026-10-07): written on Linux, where it couldn't be compiled; the first Mac session builds and fixes it.
 #import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
 #import <Metal/Metal.h>
@@ -49,9 +48,11 @@ static char exe_dir[1024];
 
 // ---------------------------------------------------------------- Vulkan: MoltenVK and the window's surface
 static PFN_vkGetInstanceProcAddr gipa;
+PFN_vkGetInstanceProcAddr vkm_loader(void);   // host/vk_metal.mm: the game's Vulkan on Metal
 static PFN_vkGetInstanceProcAddr vk_loader(void)
 {
     if (gipa) return gipa;
+    if (!getenv("SIMS_MOLTENVK")) return gipa = vkm_loader();   // MoltenVK only when asked for (SIMS_MOLTENVK=<path>, to compare)
     char p[1200]; const char *env = getenv("SIMS_MOLTENVK");
     const char *tries[] = {env, "", "", "/opt/homebrew/lib/libMoltenVK.dylib", "/usr/local/lib/libMoltenVK.dylib",
                            "libvulkan.1.dylib", "/opt/homebrew/lib/libvulkan.1.dylib", "/usr/local/lib/libvulkan.1.dylib", 0};
