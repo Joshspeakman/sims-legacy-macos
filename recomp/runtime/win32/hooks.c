@@ -52,9 +52,33 @@ __attribute__((unused)) static void guest_format(char *out, size_t cap, uint32_t
     out[n] = 0;
 }
 int native_hook(Ctx *c, uint32_t addr);   /* native.c */
+#ifdef SIMS_EDITION
+/* The Sims: the hooks lift.py puts after each push of the default resolution "1024x768 (4:3)" (find_default_resolution).
+ * The game keeps its resolution as that label (Options > Graphics > Resolution, saved in UserData/Options.iff); a fresh
+ * data folder, or an Options.iff from before the Legacy Collection's display settings, gets the default. The launch
+ * window's choice (SIMS_GAME_RES, "1920x1200 (14:9)") is pushed instead. */
+static int sims_default_resolution(Ctx *c)
+{
+    static uint32_t mine; static int state;
+    uint32_t p = rt_r32(G_MEM, c->esp);
+    if (!p || strcmp((const char *)GP(p), "1024x768 (4:3)")) return 0;
+    if (!state) {
+        const char *r = getenv("SIMS_GAME_RES"); state = 1; int w, h;
+        if (r && sscanf(r, "%dx%d", &w, &h) == 2 && w >= 640 && h >= 480 && strlen(r) < 64) {
+            mine = heap_alloc(w32_process_heap, 8, (uint32_t)strlen(r) + 1);
+            if (mine) { memcpy(GP(mine), r, strlen(r) + 1); fprintf(stderr, "sims: default resolution %s\n", r); }
+        }
+    }
+    if (mine) rt_w32(G_MEM, c->esp, mine);
+    return 1;
+}
+#endif
 void rt_hook(Ctx *c, uint32_t addr)
 {
     if (native_hook(c, addr)) return;
+#ifdef SIMS_EDITION
+    if (sims_default_resolution(c)) return;
+#endif
     switch (addr) {
     case DS2_MOOD_READ: mood_read(c); break;
     default:   /* development trace hooks (tools/lift.py DS_TRACE_HOOKS) */

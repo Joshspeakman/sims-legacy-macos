@@ -140,6 +140,7 @@ IMPL(advapi32, RegQueryValueExA)
         if (szp) rt_w32(G_MEM, szp, v->size);
         RET(0, 6);
     }
+    if (getenv("W32_REGLOG")) fprintf(stderr, "w32: registry value %s\\%s not found\n", k->path, n);
     RET(2, 6);
 }
 IMPL(advapi32, RegSetValueExA)
@@ -153,6 +154,7 @@ IMPL(advapi32, RegSetValueExA)
     if (!v) { k->v = realloc(k->v, (size_t)(k->nv + 1) * sizeof *k->v); v = &k->v[k->nv++]; memset(v, 0, sizeof *v); snprintf(v->name, sizeof v->name, "%s", n); }
     free(v->data); v->type = type; v->size = size; v->data = malloc(size ? size : 1); memcpy(v->data, GP(data), size);
     pthread_mutex_unlock(&rlock);
+    if (getenv("W32_REGLOG")) fprintf(stderr, "w32: registry set %s\\%s (type %u, %u bytes)\n", k->path, n, type, size);
     RET(0, 6);
 }
 /* (added for Dungeon Siege II) */

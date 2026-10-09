@@ -86,32 +86,39 @@ extensions and layers. `vkCreateDevice` drops unavailable extensions and feature
   R8_UNORM (all on Apple GPUs; D24S8 would be swapped by `vk_fix_format`).
 - `recomp/tests/sims_smoke.py` passes (fresh data folder → neighbourhood in 80 s).
 
-## The Mac: what's ready, and the first session there
+## The Mac
 
-Written on Linux and **not compiled yet** (no Mac here; a read-only portability audit of the runtime, the host, the
-build script and the installer found and fixed bash 3.2, ucontext, quoting, Retina-scale and quit issues): `recomp/host/sims_mac.m` (AppKit window, CAMetalLayer,
-MoltenVK loader and `VK_EXT_metal_surface`, absolute mouse, keyboard, crash reports, `launch.plist`, test scripts),
-`recomp/tools/build_mac_sims.sh` (runtime + host → `recomp/work/sims/app/SimsNative`, chosen by `build_runtime.sh`
-on Darwin) and `install.sh` (finds the game or downloads it with SteamCMD, needs `brew install molten-vk`, installs
-`~/Applications/The Sims Legacy Native.app` with MoltenVK inside). MoltenVK offers `VK_EXT_external_memory_host`
-(its user guide), so the zero-copy *import* mode should be what the Mac gets; it was tested on Linux.
+`recomp/host/sims_mac.m` (AppKit window, CAMetalLayer, absolute mouse, keyboard, crash reports, `launch.plist`, test
+scripts), `recomp/host/vk_metal.mm` (the Vulkan the game uses, on Metal: SPIRV-Cross translates its shaders at run
+time; MoltenVK only with `SIMS_MOLTENVK=<libMoltenVK.dylib>`, for comparison), `recomp/host/launcher.m` (the launch
+window), `recomp/tools/build_mac_sims.sh` and `install.sh` (`--nightly` for the Nightly app).
 
-1. `brew install molten-vk`; get the game folder (copied from a PC or a CrossOver/Whisky Steam library, or
-   `./install.sh --steamcmd <user>`).
-2. `recomp/build_sims.sh "<game>/Sims.exe"`: lifting is the same as on Linux; compiling the lifted C for arm64 has
-   worked for the other ports. Fix what `build_mac_sims.sh` / `sims_mac.m` don't compile (expected: small things).
-3. `python3 recomp/tests/sims_smoke.py recomp/work/sims/app/SimsNative recomp/work/sims/Sims.exe "<game>"`.
-4. Check the log for `mapped memory imported from guest memory`; if it says shadowed, see why (W32_VKLOG=1).
-5. Drive it (DS_CMDFILE with move/click/key/shot lines, as `recomp/tools/sims_session.sh` does on Linux), then play
-   it for real: full screen, the system cursor, keyboard shortcuts, Retina (the game renders at the screen's size
-   in points; `DS_RESOLUTION=WxH` to try others).
-6. `./install.sh`, open the app.
+**Screen.** The Legacy Collection keeps its screen as a label, Options > Graphics > Resolution ("1920x1200 (14:9)",
+"1024x768 (4:3)"), saved as the last string of the `Optn` chunk of `UserData/Options.iff` and read at start-up. Only
+its shape is used: 4:3 draws a 4:3 picture with bars, any other a full-width one (up to 16:10); the picture is drawn
+at the window's size, the art and interface scaled to its height (there is no interface-scale setting). The list in
+the game comes from `EnumDisplaySettingsA` (runtime/win32/user32.c). A fresh data folder, and an `Options.iff` older
+than the Legacy Collection's display settings (version 4: no strings), get the default "1024x768 (4:3)": lift.py
+`find_default_resolution` hooks the five pushes of that literal (0x401264, 0x431f14, 0x43251c, 0x4325e7, 0x4335e0)
+and hooks.c gives the game `SIMS_GAME_RES` instead. The launch window edits a saved label only when the shape differs
+(never creating the file: an empty `UserData` is where the game copies its template town, so a file put there first
+leaves the neighbourhood empty). The game pads `Optn` to an even size and may write `rsmp` before the filler chunk.
+
+**Launch window settings** (passed to the game process as environment): `SIMS_RESOLUTION` = retina (the display's
+pixels, default) | display (its points) | WxH; `SIMS_WINDOWED=1`; `SIMS_NOTCH=below`; `SIMS_FPS=<n>` (a cap in
+`vkm_QueuePresentKHR`; otherwise the display's rate); `SIMS_GAME_RES` (the label above). Measured in test mode,
+steady state: 117 fps uncapped (120 Hz display), 60 / 29 with the caps, 123 fps at 3456x2234.
+
+**Testing.** `DS_TEST=1` (1024x768 test window; `DS_RESOLUTION=WxH` for others), `DS_CMDFILE` lines `move`, `click`,
+`rclick`, `key`, `type`, `close`, `shot`; `VKM_LOG=1` (Metal backend: render targets and unknown commands);
+`W32_REGLOG=1` (registry misses and writes); `DS_LAUNCHER_SHOT=<png>` (the launch window as an image;
+`DS_LAUNCHER_OPEN=display`, `DS_LAUNCHER_PICK=4:3|wide`, `DS_LAUNCHER_APPLY=1` to do what Play does).
 
 ## Not done / next steps
 
-1. **The Mac session above.**
+1. The Mac: compare a full session with the reference host's capture (36 screenshots, after the launch-window work).
 2. The game's own animated cursors (`LoadCursorFromFileA` of `.ani` files) show as the system arrow.
-3. A launch window (resolution, full screen or windowed) like the other ports'.
+3. Drag-and-drop of the game's window between displays (the screen is chosen at start-up).
 4. **Remaining imports** (`python3 recomp/tools/import_gap.py recomp/work/sims/Sims.exe`): 58, none reached in
    what's been played (threadpool timers/waits, named pipes, MSVFW32 video codecs, OLEAUT32 variants, font
    enumeration). Each stops with its name if reached.

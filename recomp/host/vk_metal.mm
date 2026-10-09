@@ -26,6 +26,7 @@
 #define VK_USE_PLATFORM_METAL_EXT
 #include <vulkan/vulkan.h>
 #include <pthread.h>
+#include <time.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -90,6 +91,7 @@ static MTLPixelFormat pixfmt(VkFormat f)
     case VK_FORMAT_R8G8B8A8_UNORM: return MTLPixelFormatRGBA8Unorm;
     case VK_FORMAT_R8G8B8A8_SRGB: return MTLPixelFormatRGBA8Unorm_sRGB;
     case VK_FORMAT_R8_UNORM: return MTLPixelFormatR8Unorm;
+    case VK_FORMAT_R8_UINT: return MTLPixelFormatR8Uint;
     case VK_FORMAT_R8G8_UNORM: return MTLPixelFormatRG8Unorm;
     case VK_FORMAT_R16_UNORM: return MTLPixelFormatR16Unorm;
     case VK_FORMAT_R16_SFLOAT: return MTLPixelFormatR16Float;
@@ -111,7 +113,7 @@ static MTLPixelFormat pixfmt(VkFormat f)
 static uint32_t texel_bytes(VkFormat f)          /* bytes per texel (per 4x4 block for BCn) */
 {
     switch (f) {
-    case VK_FORMAT_R8_UNORM: return 1;
+    case VK_FORMAT_R8_UNORM: case VK_FORMAT_R8_UINT: return 1;
     case VK_FORMAT_R8G8_UNORM: case VK_FORMAT_R16_UNORM: case VK_FORMAT_R16_SFLOAT: case VK_FORMAT_D16_UNORM: case VK_FORMAT_R5G6B5_UNORM_PACK16: return 2;
     case VK_FORMAT_R16G16B16A16_SFLOAT: case VK_FORMAT_D32_SFLOAT_S8_UINT: case VK_FORMAT_BC1_RGBA_UNORM_BLOCK: return 8;
     case VK_FORMAT_R32G32B32A32_SFLOAT: case VK_FORMAT_BC2_UNORM_BLOCK: case VK_FORMAT_BC3_UNORM_BLOCK: return 16;
@@ -243,6 +245,7 @@ static void VKAPI_CALL vkm_GetPhysicalDeviceFormatProperties(VkPhysicalDevice, V
     if (m != MTLPixelFormatInvalid) {
         VkFormatFeatureFlags t = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
         if (is_depth(f)) t |= VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        else if (f == VK_FORMAT_R8_UINT || f == VK_FORMAT_R32_UINT) t |= VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT;   /* integer: no filtering or blending */
         else if (!is_bc(f)) t |= VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
         else t |= VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
         p->optimalTilingFeatures = t; p->linearTilingFeatures = is_depth(f) || is_bc(f) ? 0 : t;
@@ -358,6 +361,7 @@ static VkResult VKAPI_CALL vkm_CreateImage(VkDevice d, const VkImageCreateInfo *
     MTLTextureDescriptor *td = [MTLTextureDescriptor new];
     td.textureType = ci->imageType == VK_IMAGE_TYPE_3D ? MTLTextureType3D : (ci->arrayLayers > 1 ? MTLTextureType2DArray : MTLTextureType2D);
     if ((ci->flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT) && ci->arrayLayers == 6) td.textureType = MTLTextureTypeCube;
+    if ((ci->usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) && ci->extent.width >= 640) LOG("render target %ux%u (format %d)\n", ci->extent.width, ci->extent.height, ci->format);
     td.pixelFormat = pf; td.width = ci->extent.width; td.height = ci->extent.height; td.depth = ci->imageType == VK_IMAGE_TYPE_3D ? ci->extent.depth : 1;
     td.mipmapLevelCount = ci->mipLevels; td.arrayLength = td.textureType == MTLTextureTypeCube ? 1 : (ci->imageType == VK_IMAGE_TYPE_3D ? 1 : ci->arrayLayers);
     td.storageMode = MTLStorageModePrivate;
@@ -916,13 +920,26 @@ static VkResult VKAPI_CALL vkm_AcquireNextImageKHR(VkDevice, VkSwapchainKHR s, u
     if (f) signal(f);
     return VK_SUCCESS;
 }
+/* SIMS_FPS=<n>: at most n frames a second (the launch window's Frame Rate row); otherwise the display's own rate, which
+ * the drawables (vertical sync) set */
+static void pace(void)
+{
+    static double period = -1, next; struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); double now = t.tv_sec + t.tv_nsec * 1e-9;
+    if (period < 0) { const char *f = getenv("SIMS_FPS"); period = f && atof(f) >= 10 ? 1.0 / atof(f) : 0; next = now; }
+    if (period <= 0) return;
+    if (next > now) { double d = next - now; struct timespec w = {(time_t)d, (long)((d - (time_t)d) * 1e9)}; nanosleep(&w, 0); now = next; }
+    next = (next + period > now - period) ? next + period : now + period;   /* fall behind by a frame at most */
+}
 static VkResult VKAPI_CALL vkm_QueuePresentKHR(VkQueue q, const VkPresentInfoKHR *pi)
 {
     VkDevice_T *d = q->d;
     @autoreleasepool {
         for (uint32_t k = 0; k < pi->swapchainCount; k++) {
             VkSwapchainKHR_T *s = pi->pSwapchains[k]; VkImage_T *im = s->img[pi->pImageIndices[k]];
-            id<CAMetalDrawable> dr = [s->surf->layer nextDrawable];
+            CAMetalLayer *l = s->surf->layer;
+            if (l.drawableSize.width != s->ext.width || l.drawableSize.height != s->ext.height) l.drawableSize = CGSizeMake(s->ext.width, s->ext.height);   /* a resized window: the game's size still */
+            pace();
+            id<CAMetalDrawable> dr = [l nextDrawable];
             if (!dr) { if (pi->pResults) pi->pResults[k] = VK_SUCCESS; continue; }
             id<MTLCommandBuffer> cb = [d->q commandBuffer];
             id<MTLTexture> t = dr.texture; NSUInteger w = t.width < im->tex.width ? t.width : im->tex.width, h = t.height < im->tex.height ? t.height : im->tex.height;

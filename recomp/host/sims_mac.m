@@ -14,6 +14,8 @@
 #define DS_BUILD "dev"
 #endif
 #include <dlfcn.h>
+#include <ctype.h>
+#include <spawn.h>
 #include <pthread.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -43,6 +45,7 @@ const char *w32_crash_report(const char *kind, const char *reason, Ctx *c, uint3
 void w32_registry_install(const char *data_dir);
 
 static CAMetalLayer *layer; static NSWindow *win; static NSView *view; static uint32_t game_hwnd;
+static double layer_scale = 1; static int windowed; static double notch_inset;   /* the launch window's choices (main) */
 static volatile int game_running = 1; static int test_mode;
 static char exe_dir[1024];
 
@@ -135,9 +138,9 @@ static void key_event(uint16_t code, int down, int repeat)
 - (BOOL)acceptsFirstResponder { return YES; }
 - (BOOL)wantsUpdateLayer { return YES; }
 - (CALayer *)makeBackingLayer { return layer; }
-/* one pixel per point: AppKit sets a backing layer's contentsScale to the screen's (2 on Retina), and MoltenVK
- * reports the surface as bounds x contentsScale; the game's frame is its screen size (w32_screen_w x h) */
-- (void)viewDidChangeBackingProperties { [super viewDidChangeBackingProperties]; layer.contentsScale = 1; }
+/* the layer's scale: the screen's own (2 on Retina) when the game renders at the display's pixels (SIMS_RESOLUTION=retina:
+ * its frame then lands one pixel per pixel), else 1 (the frame is scaled up to the window) */
+- (void)viewDidChangeBackingProperties { [super viewDidChangeBackingProperties]; layer.contentsScale = layer_scale; }
 /* The Sims shows the system cursor and reads GetCursorPos: the pointer's place in the view, scaled to the game's
  * screen (its window covers it) */
 - (void)moved:(NSEvent *)e
@@ -232,6 +235,14 @@ static void script_tick(uint32_t fno)                     // on the game thread,
         } else if (!strcmp(a->kind, "key")) {
             if (fno == a->frame) { w32_keys[a->x & 0xff] = 0x80; post(0x100, (uint32_t)a->x, 1); }
             if (fno == a->frame + 3) { w32_keys[a->x & 0xff] = 0; post(0x101, (uint32_t)a->x, 0xc0000001u); }
+        } else if (!strcmp(a->kind, "close") && fno == a->frame) { post(0x10, 0, 0);   /* WM_CLOSE, as Cmd-Q / the window's close */
+        } else if (!strcmp(a->kind, "type") && fno == a->frame) {   /* each character as a key press and WM_CHAR, as host/linux.c */
+            for (const unsigned char *p = (const unsigned char *)a->path; *p; p++) {
+                uint32_t vk = (uint32_t)toupper(*p);
+                w32_keys[vk & 0xff] = 0x80; post(0x100, vk, 1);
+                if (*p >= 32) post(0x102, *p, 1);
+                w32_keys[vk & 0xff] = 0; post(0x101, vk, 0xc0000001u);
+            }
         } else if (!strcmp(a->kind, "shot") && fno == a->frame) snprintf(w32_vk_shot_req, sizeof w32_vk_shot_req, "%s", a->path);
     }
     pthread_mutex_unlock(&act_m);
@@ -251,15 +262,26 @@ static void window_created(uint32_t hwnd, int x, int y, int w, int h, uint32_t s
     if (game_hwnd) return;                                            // the game has one top-level window
     game_hwnd = hwnd;
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSRect f = NSScreen.mainScreen.frame;
+        NSScreen *scr = NSScreen.mainScreen; NSRect f = scr.frame;
         NSWindowStyleMask sm = NSWindowStyleMaskBorderless;
         if (test_mode) { f = NSMakeRect(80, 80, w32_screen_w, w32_screen_h); sm = NSWindowStyleMaskTitled | NSWindowStyleMaskMiniaturizable; }
+        else if (windowed) {                                           // a window in the game's shape, 80% of the screen at most
+            NSRect v = scr.visibleFrame; double a = (double)w32_screen_w / w32_screen_h, h = v.size.height * 0.8, w = h * a;
+            if (w > v.size.width * 0.8) { w = v.size.width * 0.8; h = w / a; }
+            f = NSMakeRect(NSMidX(v) - w / 2, NSMidY(v) - h / 2, w, h);
+            sm = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable;
+        }
         win = [[GameWindow alloc] initWithContentRect:f styleMask:sm backing:NSBackingStoreBuffered defer:NO];
         win.releasedWhenClosed = NO;
+        if (windowed && !test_mode) win.contentAspectRatio = NSMakeSize(w32_screen_w, w32_screen_h);
         f.origin = NSZeroPoint;
         win.title = @"The Sims"; win.backgroundColor = NSColor.blackColor; win.acceptsMouseMovedEvents = YES;
-        view = [[GameView alloc] initWithFrame:f]; view.wantsLayer = YES;
-        win.contentView = view; [win makeFirstResponder:view];
+        if (notch_inset > 0 && !test_mode && !windowed) {          /* below the notch: the game's view under it, the strip black */
+            NSView *box = [[NSView alloc] initWithFrame:f]; box.wantsLayer = YES; box.layer.backgroundColor = CGColorGetConstantColor(kCGColorBlack);
+            view = [[GameView alloc] initWithFrame:NSMakeRect(0, 0, f.size.width, f.size.height - notch_inset)]; view.wantsLayer = YES;
+            [box addSubview:view]; win.contentView = box;
+        } else { view = [[GameView alloc] initWithFrame:f]; view.wantsLayer = YES; win.contentView = view; }
+        [win makeFirstResponder:view]; layer.contentsScale = layer_scale;
         win.collectionBehavior = NSWindowCollectionBehaviorFullScreenPrimary;
     });
 }
@@ -272,7 +294,7 @@ static void window_changed(uint32_t hwnd, int x, int y, int w, int h, int visibl
         if (visible && !win.visible) {
             if (test_mode) [win orderBack:nil];
             else {
-                [NSApp setPresentationOptions:NSApplicationPresentationHideDock | NSApplicationPresentationHideMenuBar];
+                if (!windowed) [NSApp setPresentationOptions:NSApplicationPresentationHideDock | NSApplicationPresentationHideMenuBar];
                 [win makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES];
             }
         }
@@ -341,6 +363,11 @@ int main(int argc, char **argv)
             NSString *g = pl[@"game"], *d = pl[@"data"]; log = pl[@"log"];
             if (g && d) { game = strdup(g.UTF8String); data = strdup(d.UTF8String);
                           exe = strdup([bin stringByAppendingPathComponent:@"../Resources/Sims.exe"].UTF8String); }
+            NSString *upd = [bin stringByAppendingPathComponent:@"update"];   /* the launch window's Updates (install.sh) */
+            if ([NSFileManager.defaultManager isExecutableFileAtPath:upd] && pl[@"branch"]) {
+                setenv("DS_UPDATER", upd.fileSystemRepresentation, 1); setenv("DS_UPDATE_BRANCH", [pl[@"branch"] UTF8String], 1);
+                setenv("DS_BUILT_COMMIT", [pl[@"built"] ?: @"" UTF8String], 1);
+            }
         }
         if (!exe || !game || !data) { fprintf(stderr, "usage: SimsNative --exe <Sims.exe> --game <game folder> --data <data folder>\n"); return 1; }
         char drive_c[1024], overlay[1024];
@@ -354,11 +381,41 @@ int main(int argc, char **argv)
             if (fd >= 0) { dup2(fd, 2); close(fd); setenv("DS_LOG_FILE", lp.UTF8String, 1); }   // stderr kept if not
         }
         test_mode = getenv("DS_TEST") && atoi(getenv("DS_TEST"));
-        /* the game's screen: the display in points (the game sizes its frame and interface to it), the test window's
-         * 1024x768 in test mode, or DS_RESOLUTION=WxH */
-        NSRect sf = NSScreen.mainScreen.frame; w32_screen_w = (int)sf.size.width; w32_screen_h = (int)sf.size.height;
-        if (test_mode) { w32_screen_w = 1024; w32_screen_h = 768; }
-        { const char *r = getenv("DS_RESOLUTION"); int rw, rh; if (r && sscanf(r, "%dx%d", &rw, &rh) == 2 && rw >= 800 && rh >= 600) { w32_screen_w = rw; w32_screen_h = rh; } }
+        {   /* the launch window (host/launcher.m: its choices come back as SIMS_* settings, read below) unless in test mode */
+            int ds_launcher_run(const char *game_dir, const char *data_dir);
+            if (!test_mode || getenv("DS_LAUNCHER_SHOT")) {
+                [NSApplication sharedApplication]; [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+                int shown = !getenv("DS_NO_LAUNCHER");
+                if (!ds_launcher_run(game, data)) return 0;
+                /* Play: the game in a fresh process (the choices are in its environment) and this one ends; a game window
+                 * shown by the process that ran the launch window can stay off screen in macOS full screen (seen in the
+                 * Diablo II port) */
+                if (shown && !getenv("DS_SAME_PROCESS")) {
+                    extern char **environ; setenv("DS_NO_LAUNCHER", "1", 1); pid_t pid;
+                    int rc = posix_spawn(&pid, argv[0], NULL, NULL, argv, environ);
+                    fprintf(stderr, "SimsNative: the game in a new process (%d, %s)\n", rc ? -1 : (int)pid, rc ? strerror(rc) : "started");
+                    if (rc == 0) return 0;
+                    unsetenv("DS_NO_LAUNCHER");                           /* could not: carry on here */
+                }
+            }
+        }
+        /* The game's screen, which it renders at (its 4:3 picture fitted to the height, the interface with it). The launch
+         * window's choices: SIMS_RESOLUTION = retina (the display's pixels: sharpest, the default), display (its points,
+         * scaled up), or WxH; SIMS_WINDOWED=1 (a window instead of full screen); SIMS_NOTCH=below (full screen under a
+         * notch). Test mode: 1024x768. DS_RESOLUTION=WxH overrides any of them. */
+        {
+            NSScreen *scr = NSScreen.mainScreen; NSRect sf = scr.frame; double bs = scr.backingScaleFactor > 0 ? scr.backingScaleFactor : 1;
+            const char *res = getenv("SIMS_RESOLUTION"), *nt = getenv("SIMS_NOTCH"); windowed = getenv("SIMS_WINDOWED") && atoi(getenv("SIMS_WINDOWED"));
+            if (@available(macOS 12.0, *)) if (!windowed && nt && !strcmp(nt, "below")) notch_inset = scr.safeAreaInsets.top;
+            double pw = sf.size.width, ph = sf.size.height - notch_inset; int rw, rh;
+            if (res && sscanf(res, "%dx%d", &rw, &rh) == 2 && rw >= 640 && rh >= 480) { w32_screen_w = rw; w32_screen_h = rh; }
+            else if (res && !strcmp(res, "display")) { w32_screen_w = (int)pw; w32_screen_h = (int)ph; }
+            else { w32_screen_w = (int)(pw * bs); w32_screen_h = (int)(ph * bs); layer_scale = bs; }
+            if (test_mode) { w32_screen_w = 1024; w32_screen_h = 768; layer_scale = 1; }
+            const char *r = getenv("DS_RESOLUTION"); if (r && sscanf(r, "%dx%d", &rw, &rh) == 2 && rw >= 640 && rh >= 480) { w32_screen_w = rw; w32_screen_h = rh; }
+            w32_screen_w &= ~1; w32_screen_h &= ~1;
+            fprintf(stderr, "SimsNative: the game's screen is %dx%d%s%s\n", w32_screen_w, w32_screen_h, windowed ? " (in a window)" : "", notch_inset > 0 ? " (below the notch)" : "");
+        }
         w32_screen_scale = 1;
         init_keymap();
         w32_crash_init(data, DS_BUILD); w32_crash_thread("macOS UI thread");
@@ -374,18 +431,14 @@ int main(int argc, char **argv)
         /* The layer exists before the game makes its window, sized to the game's screen at one pixel per point, so the
          * surface the game queries (MoltenVK: the layer's bounds x contentsScale) is the screen it renders for */
         layer = [CAMetalLayer layer]; layer.device = MTLCreateSystemDefaultDevice(); layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-        layer.opaque = YES; layer.contentsGravity = kCAGravityResizeAspect; layer.contentsScale = 1;
+        layer.opaque = YES; layer.contentsGravity = kCAGravityResizeAspect; layer.contentsScale = layer_scale;
         layer.frame = CGRectMake(0, 0, w32_screen_w, w32_screen_h); layer.drawableSize = CGSizeMake(w32_screen_w, w32_screen_h);
         layer.backgroundColor = CGColorGetConstantColor(kCGColorBlack);
 
         w32_host_vk_loader = vk_loader; w32_host_vk_extensions = vk_extensions; w32_host_vk_surface = vk_surface; w32_host_vk_presented = vk_presented;
         w32_host_window_created = window_created; w32_host_window_changed = window_changed;
         w32_relative_cursor(0);
-        if (!vk_loader()) {
-            NSAlert *al = [NSAlert new]; al.messageText = @"MoltenVK is needed";
-            al.informativeText = @"The Sims draws with Vulkan, which runs on MoltenVK. Install it with Homebrew (brew install molten-vk) and reinstall the app.";
-            [al runModal]; return 1;
-        }
+        if (!vk_loader()) { fprintf(stderr, "SimsNative: no Vulkan (SIMS_MOLTENVK set to a library that couldn't be loaded?)\n"); return 1; }
         if (w32_prepare(exe, game, drive_c, overlay)) { fprintf(stderr, "SimsNative: cannot load %s\n", exe); return 1; }
         [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *tm) { (void)tm; w32_crash_heartbeat(2); }];   /* UI thread alive */
         if (getenv("DS_EXIT_AFTER") && atof(getenv("DS_EXIT_AFTER")) > 0)                              /* tests: stop after so many seconds */

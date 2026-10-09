@@ -6,16 +6,15 @@ dungeon-siege-2-macos, diablo-2-macos and fallout-nv-macos do for their games. N
 Nothing from the game is in this repository: the build regenerates everything locally from your Steam files, and the
 game folder is only read.
 
-**State: plays on Linux; the Mac app is written and waiting for its first build on a Mac (2026-10-07).** The
-recompiled `Sims.exe` runs the neighbourhood, Create a Sim, lots in live and buy mode (Sims walking, pie menus, day
-and night), saving, and music; a 40-minute run at full speed had no faults. The macOS host (MoltenVK), its build and
-the installer are in place but haven't been compiled yet. Details, what's verified and the Mac steps:
-[docs/SIMS-PORT.md](docs/SIMS-PORT.md).
+**State: plays on Linux and runs on the Mac (2026-10-08).** The recompiled `Sims.exe` runs the neighbourhood, Create
+a Sim, lots in live and buy mode (Sims walking, pie menus, day and night), saving, and music; a 40-minute run at full
+speed had no faults on Linux. On the Mac the game's Vulkan runs on Metal directly (`recomp/host/vk_metal.mm`, no
+MoltenVK), at the display's resolution and refresh rate (120 fps on a ProMotion display), widescreen, with a launch
+window. Details, what's verified and the Mac notes: [docs/SIMS-PORT.md](docs/SIMS-PORT.md).
 
-## Install (Mac, once the first Mac build is done)
+## Install (Mac)
 
 ```sh
-brew install molten-vk
 ./install.sh --game-dir "/path/to/The Sims Legacy Collection"   # a copy of the Steam (Windows) install
 ./install.sh --steamcmd <your Steam user name>                  # or let SteamCMD download the Windows build you own
 ```
@@ -32,7 +31,7 @@ brew install molten-vk
   the 113 Vulkan commands the game uses, converting structures between the 32-bit game's layout and the host's
   (`runtime/win32/vulkan_gen.c`); `runtime/win32/vulkan.c` does instances, devices, surfaces and mapped memory (placed
   inside the game's 4 GB with `VK_EXT_map_memory_placed`, shadowed where the driver lacks it). On Linux it runs on the
-  system's Vulkan; on the Mac it will run on MoltenVK.
+  system's Vulkan; on the Mac a subset of Vulkan on Metal (`recomp/host/vk_metal.mm`).
 
 ## Build and run (Linux, for development)
 
