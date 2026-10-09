@@ -67,8 +67,8 @@ enum { BANNER_H = 252, TOP_Y = 270 };
 - (NSRect)valueRect:(NSInteger)k { NSRect r = [self rowRect:k]; return NSMakeRect(NSMaxX(r) - 300, r.origin.y + 7, 262, 30); }
 - (NSRect)sectionRect:(NSInteger)i
 {
-    NSInteger n = (NSInteger)self.sections.count, per = 2, line = i / per, inLine = MIN(per, n - line * per), col = i % per;
-    CGFloat w = 290, g = 28, x0 = (self.bounds.size.width - (inLine * w + (inLine - 1) * g)) / 2;
+    NSInteger n = (NSInteger)self.sections.count, per = n > 4 ? 3 : 2, line = i / per, inLine = MIN(per, n - line * per), col = i % per;
+    CGFloat w = per == 3 ? 214 : 290, g = per == 3 ? 22 : 28, x0 = (self.bounds.size.width - (inLine * w + (inLine - 1) * g)) / 2;
     return NSMakeRect(x0 + col * (w + g), TOP_Y + 74 * self.top.count + 44 + line * 100, w, 54);
 }
 - (NSRect)playRect { NSRect b = self.bounds; return NSMakeRect(NSMidX(b) + 12, b.size.height - 80, 220, 52); }
@@ -283,6 +283,16 @@ static NSArray<NSDictionary *> *resolution_choices(void)
                    @"note": k > 1 ? @"Half the pixels each way, scaled up: lighter on the GPU" : @"The display's own size"}];
     return a;
 }
+static NSArray<NSDictionary *> *ui_choices(void)
+{
+    NSMutableArray *a = [NSMutableArray array];
+    for (NSNumber *p in @[@100, @110, @120, @90, @80, @70, @60, @50]) {
+        int v = p.intValue; NSString *note = v == 100 ? @"The game's own size for this screen"
+            : v > 100 ? @"Larger interface; closer view of the lot" : @"Smaller interface; more of the lot on screen";
+        [a addObject:@{@"value": p.stringValue, @"label": v == 100 ? @"100% (Standard)" : [NSString stringWithFormat:@"%d%%", v], @"note": note}];
+    }
+    return a;
+}
 static NSArray<NSDictionary *> *shape_choices(void)
 {
     return @[@{@"value": @"wide", @"label": @"Widescreen", @"note": @"The Legacy Collection's wide view: more of the lot"},
@@ -366,22 +376,72 @@ static BOOL options_set_resolution(NSString *data, NSString *res)
     size_t o2, s2, e2; if (!options_find(m, &o2, &s2, &e2) || e2 - s2 != r.length) return NO;   /* reads back as the game will */
     return [m writeToFile:p atomically:YES];
 }
+/* the graphics settings (Options > Graphics), single bytes of Optn in version 8 (found by changing each in the game):
+ * Shadows +92, Lighting +93, Terrain Detail +94 (0 Low, 1 Medium, 2 High), Interface Effects +103 */
+static const int gfx_at[4] = {92, 93, 103, 94}, gfx_max[4] = {1, 1, 1, 2};
+static BOOL options_graphics(NSString *data, int v[4])
+{
+    NSData *f = [NSData dataWithContentsOfFile:options_path(data)]; size_t o, s, e;
+    if (!f || !options_find(f, &o, &s, &e) || o + 104 > s) return NO;
+    for (int k = 0; k < 4; k++) { v[k] = ((const uint8_t *)f.bytes)[o + gfx_at[k]]; if (v[k] > gfx_max[k]) return NO; }
+    return YES;
+}
+static BOOL options_set_graphics(NSString *data, const int v[4])
+{
+    NSString *p = options_path(data); NSMutableData *f = [NSMutableData dataWithContentsOfFile:p]; size_t o, s, e; int now[4];
+    if (!f || !options_graphics(data, now)) return NO;
+    if (!memcmp(now, v, sizeof now)) return YES;
+    options_find(f, &o, &s, &e);
+    for (int k = 0; k < 4; k++) ((uint8_t *)f.mutableBytes)[o + gfx_at[k]] = (uint8_t)v[k];
+    return [f writeToFile:p atomically:YES];
+}
+static NSArray<NSDictionary *> *onoff(NSString *on, NSString *off)
+{
+    return @[@{@"value": @"1", @"label": @"On", @"note": on}, @{@"value": @"0", @"label": @"Off", @"note": off}];
+}
+static NSArray<NSDictionary *> *terrain_choices(void)
+{
+    return @[@{@"value": @"2", @"label": @"High", @"note": @"The ground's full texture detail"},
+             @{@"value": @"1", @"label": @"Medium", @"note": @"Less ground detail"},
+             @{@"value": @"0", @"label": @"Low", @"note": @"The plainest ground"}];
+}
+static NSArray<NSDictionary *> *edge_choices(void)
+{
+    return @[@{@"value": @"8", @"label": @"Easy", @"note": @"Scrolls with the pointer near an edge (8 points)"},
+             @{@"value": @"20", @"label": @"Easiest", @"note": @"A wider band at the edges (20 points)"},
+             @{@"value": @"0", @"label": @"Original", @"note": @"Only the outermost pixels, as the game does"}];
+}
+static NSArray<NSDictionary *> *pinch_choices(void)
+{
+    return @[@{@"value": @"1", @"label": @"Pinch to Zoom", @"note": @"Trackpad pinch steps the game's zoom, like the wheel"},
+             @{@"value": @"0", @"label": @"Off", @"note": @"Zoom with the wheel or the zoom buttons only"}];
+}
 static BOOL wide_label(NSString *r) { return r && ![r containsString:@"(4:3)"]; }
-/* the label for the game's screen, as its own list writes them */
-static NSString *game_label(int w, int h, BOOL wide) { return wide ? [NSString stringWithFormat:@"%dx%d (14:9)", w, h] : [NSString stringWithFormat:@"%dx%d (4:3)", h * 4 / 3, h]; }
+/* the label for the game's screen exactly as its own list writes it (the saved label must match an entry, else the
+ * game takes the whole screen): the screen itself, "WxH (q:9)" with q = 9W/H rounded ("4:3" when q is 12), and a 4:3
+ * entry whose width is 4H/3 rounded, made even (Sims.exe 0x6efd8b, 0x6effcf) */
+static NSString *game_label(int w, int h, BOOL wide)
+{
+    if (!wide) return [NSString stringWithFormat:@"%dx%d (4:3)", ((8 * h + 3) / 6) & ~1, h];
+    int q = (9 * w + h / 2) / h;
+    return q == 12 ? [NSString stringWithFormat:@"%dx%d (4:3)", w, h] : [NSString stringWithFormat:@"%dx%d (%d:9)", w, h, q];
+}
 
 /* the chosen settings as environment for the game (host/sims_mac.m, host/vk_metal.mm, runtime/win32/hooks.c). An
  * environment already set (a terminal) wins. */
-static void apply(NSString *res, NSString *shape, NSString *window, NSString *notch, NSString *fps)
+void sims_screen(int test, int *w, int *h, int *dpi, double *scale, double *notch, int *win);   /* sims_mac.m */
+static void apply(NSString *res, NSString *ui, NSString *shape, NSString *window, NSString *notch, NSString *fps, NSString *edge, NSString *pinch)
 {
+    if (!getenv("SIMS_EDGE")) setenv("SIMS_EDGE", edge.UTF8String, 1);
+    if (!getenv("SIMS_PINCH")) setenv("SIMS_PINCH", pinch.UTF8String, 1);
     if (!getenv("SIMS_RESOLUTION")) setenv("SIMS_RESOLUTION", res.UTF8String, 1);
     if (!getenv("SIMS_WINDOWED") && [window isEqualToString:@"window"]) setenv("SIMS_WINDOWED", "1", 1);
     if (!getenv("SIMS_NOTCH") && [notch isEqualToString:@"below"]) setenv("SIMS_NOTCH", "below", 1);
     if (!getenv("SIMS_FPS") && ![fps isEqualToString:@"display"]) setenv("SIMS_FPS", fps.UTF8String, 1);
-    if (!getenv("SIMS_GAME_RES")) {                    /* the label: the size the host will give the game */
-        NSScreen *s = NSScreen.mainScreen; CGFloat k = [res isEqualToString:@"retina"] && s.backingScaleFactor > 1 ? s.backingScaleFactor : 1;
-        CGFloat top = 0; if (@available(macOS 12.0, *)) if ([notch isEqualToString:@"below"] && ![window isEqualToString:@"window"]) top = s.safeAreaInsets.top;
-        setenv("SIMS_GAME_RES", game_label((int)(s.frame.size.width * k) & ~1, (int)((s.frame.size.height - top) * k) & ~1, [shape isEqualToString:@"wide"]).UTF8String, 1);
+    if (!getenv("SIMS_UI") && ![ui isEqualToString:@"100"]) setenv("SIMS_UI", ui.UTF8String, 1);
+    if (!getenv("SIMS_GAME_RES")) {                    /* the label: the screen the host will give the game (sims_mac.m) */
+        int w, h, dpi, win; double sc, top; sims_screen(0, &w, &h, &dpi, &sc, &top, &win);
+        setenv("SIMS_GAME_RES", game_label(w, h, [shape isEqualToString:@"wide"]).UTF8String, 1);
     }
 }
 /* the art: <data>/art, else the copy in the app (Resources/art) */
@@ -524,7 +584,19 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
 {
     NSString *data = @(data_dir), *plistPath = [data stringByAppendingPathComponent:@"launcher.plist"]; (void)game_dir;
     NSDictionary *saved = [NSDictionary dictionaryWithContentsOfFile:plistPath] ?: @{};
-    DSRow *res = [DSRow new], *shape = [DSRow new], *window = [DSRow new], *notch = [DSRow new], *fps = [DSRow new];
+    DSRow *res = [DSRow new], *ui = [DSRow new], *shape = [DSRow new], *window = [DSRow new], *notch = [DSRow new], *fps = [DSRow new];
+    ui.title = @"Interface Size"; ui.choices = ui_choices(); ui.index = index_of(ui.choices, saved[@"interface"], 0);
+    DSRow *shadows = [DSRow new], *lighting = [DSRow new], *effects = [DSRow new], *terrain = [DSRow new], *edge = [DSRow new], *pinch = [DSRow new];
+    int gv[4] = {1, 1, 1, 2}; BOOL gameGfx = options_graphics(data, gv);   /* the game's own settings win (changed in the game) */
+    NSArray *gsaved = saved[@"graphics"]; if (!gameGfx && gsaved.count == 4) for (int k = 0; k < 4; k++) gv[k] = [gsaved[k] intValue];
+    shadows.title = @"Shadows"; shadows.choices = onoff(@"Shadows under Sims and objects", @"No shadows: lighter on the GPU");
+    lighting.title = @"Lighting"; lighting.choices = onoff(@"Light from lamps, windows and the time of day", @"Even light everywhere");
+    effects.title = @"Interface Effects"; effects.choices = onoff(@"The interface's animations and glows", @"A plainer, quicker interface");
+    terrain.title = @"Terrain Detail"; terrain.choices = terrain_choices();
+    DSRow *gr[4] = {shadows, lighting, effects, terrain};
+    for (int k = 0; k < 4; k++) gr[k].index = index_of(gr[k].choices, [NSString stringWithFormat:@"%d", gv[k]], 0);
+    edge.title = @"Edge Scrolling"; edge.choices = edge_choices(); edge.index = index_of(edge.choices, saved[@"edge"], 0);
+    pinch.title = @"Trackpad"; pinch.choices = pinch_choices(); pinch.index = index_of(pinch.choices, saved[@"pinch"], 0);
     res.title = @"Resolution"; res.choices = resolution_choices(); res.index = index_of(res.choices, saved[@"resolution"], 0);
     NSString *gameRes = options_resolution(data);      /* the game's own setting, if it has one: a change made in the game wins */
     NSString *shapeNow = gameRes ? (wide_label(gameRes) ? @"wide" : @"4:3") : saved[@"shape"];
@@ -534,14 +606,18 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     fps.title = @"Frame Rate"; fps.choices = framerate_choices(); fps.index = index_of(fps.choices, saved[@"frameRate"], 0);
     NSString *(^val)(DSRow *) = ^NSString *(DSRow *r) { return r.choices[r.index][@"value"]; };
     void (^finish)(void) = ^{                          /* the choices: saved, given to the game, and its own setting matched */
-        [@{@"resolution": val(res), @"shape": val(shape), @"window": val(window), @"notch": val(notch), @"frameRate": val(fps)} writeToFile:plistPath atomically:YES];
-        apply(val(res), val(shape), val(window), val(notch), val(fps));
+        NSArray *g = @[val(shadows), val(lighting), val(effects), val(terrain)];
+        int gw[4]; for (int k = 0; k < 4; k++) gw[k] = [g[k] intValue];
+        if (options_graphics(data, (int[4]){0}) && !options_set_graphics(data, gw))
+            fprintf(stderr, "launcher: couldn't change the game's graphics settings in %s\n", options_path(data).UTF8String);
+        [@{@"graphics": g, @"edge": val(edge), @"pinch": val(pinch), @"resolution": val(res), @"interface": val(ui), @"shape": val(shape), @"window": val(window), @"notch": val(notch), @"frameRate": val(fps)} writeToFile:plistPath atomically:YES];
+        apply(val(res), val(ui), val(shape), val(window), val(notch), val(fps), val(edge), val(pinch));
         NSString *now = options_resolution(data), *want = @(getenv("SIMS_GAME_RES") ?: "");
         if (now && want.length && wide_label(now) != wide_label(want) && !options_set_resolution(data, want))
             fprintf(stderr, "launcher: couldn't change the game's resolution in %s\n", options_path(data).UTF8String);
     };
     const char *shot = getenv("DS_LAUNCHER_SHOT");
-    if (getenv("DS_NO_LAUNCHER") && !shot) { if (saved.count) apply(val(res), val(shape), val(window), val(notch), val(fps)); return 1; }
+    if (getenv("DS_NO_LAUNCHER") && !shot) { if (saved.count) apply(val(res), val(ui), val(shape), val(window), val(notch), val(fps), val(edge), val(pinch)); return 1; }
 
     NSString *updater = getenv("DS_UPDATER") ? @(getenv("DS_UPDATER")) : nil, *branch = getenv("DS_UPDATE_BRANCH") ? @(getenv("DS_UPDATE_BRANCH")) : @"main";
     NSString *built = getenv("DS_BUILT_COMMIT") ? @(getenv("DS_BUILT_COMMIT")) : @"";
@@ -550,13 +626,16 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     __block int ustate = updater ? UPD_CHECKING : UPD_NONE; __block NSString *latest = nil;
     upd.choices = update_choice(ustate, branch, built, nil);
     BOOL shotMode = shot != NULL;
-    DSSection *display = [DSSection new], *saves = [DSSection new], *updSec = [DSSection new];
-    display.title = @"Display"; display.rows = has_notch() ? @[res, window, notch, fps] : @[res, window, fps];
+    DSSection *display = [DSSection new], *graphics = [DSSection new], *controls = [DSSection new], *saves = [DSSection new], *updSec = [DSSection new];
+    graphics.title = @"Graphics"; graphics.rows = @[shadows, lighting, effects, terrain];
+    controls.title = @"Controls"; controls.rows = @[edge, pinch];
+    display.title = @"Display"; display.rows = has_notch() ? @[res, ui, window, notch, fps] : @[res, ui, window, fps];
     saves.title = @"Saves"; saves.summary = ^NSString * { return @"Your neighbourhoods, in Finder"; };
     updSec.title = @"Updates"; updSec.summary = ^NSString * { NSDictionary *c = upd.choices[upd.index]; return [c[@"note"] length] ? [NSString stringWithFormat:@"%@ · %@", c[@"label"], c[@"note"]] : c[@"label"]; };
     DSLaunchView *v = [[DSLaunchView alloc] initWithFrame:NSMakeRect(0, 0, 780, 700)];
-    v.top = @[shape]; v.sections = @[display, saves, updSec]; v.open = -1; v.hover = v.pressed = HIT_NONE;
-    v.note = @"Sound, scrolling and detail: in the game's own Options. Cmd-Q asks the game to quit, as its own Quit does.";
+    v.top = @[shape]; v.sections = @[display, graphics, controls, saves, updSec]; v.open = -1; v.hover = v.pressed = HIT_NONE;
+    v.note = gameGfx ? @"Zoom: the wheel, a pinch, or the game's buttons. Cmd-Q asks the game to quit, as its own Quit does."
+                     : @"Graphics settings take effect from the second start (the game makes its settings file the first time).";
     __weak DSLaunchView *wv = v; __weak DSRow *wu = upd;
     saves.activate = ^{
         NSString *dir = [[options_path(data) stringByDeletingLastPathComponent] stringByDeletingLastPathComponent];
@@ -601,7 +680,15 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     if (shot) {   /* development: the window as an image */
         const char *open = getenv("DS_LAUNCHER_OPEN");
         if (open) for (NSInteger i = 0; i < (NSInteger)v.sections.count; i++) if ([v.sections[i].title caseInsensitiveCompare:@(open)] == NSOrderedSame) v.open = i;
-        if (getenv("DS_LAUNCHER_PICK")) shape.index = index_of(shape.choices, @(getenv("DS_LAUNCHER_PICK")), shape.index);
+        if (getenv("DS_LAUNCHER_PICK")) {                 /* "4:3" (Screen Shape), or "Row Title=value,..." for any row */
+            NSString *pk = @(getenv("DS_LAUNCHER_PICK"));
+            if (![pk containsString:@"="]) shape.index = index_of(shape.choices, pk, shape.index);
+            else for (NSString *kv in [pk componentsSeparatedByString:@","]) {
+                NSArray *two = [kv componentsSeparatedByString:@"="]; if (two.count != 2) continue;
+                NSMutableArray<DSRow *> *all = [NSMutableArray arrayWithArray:v.top]; for (DSSection *sec in v.sections) [all addObjectsFromArray:sec.rows ?: @[]];
+                for (DSRow *r in all) if ([r.title caseInsensitiveCompare:two[0]] == NSOrderedSame) r.index = index_of(r.choices, two[1], r.index);
+            }
+        }
         NSBitmapImageRep *rep = [v bitmapImageRepForCachingDisplayInRect:v.bounds]; [v cacheDisplayInRect:v.bounds toBitmapImageRep:rep];
         [[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:@(shot) atomically:YES];
         if (getenv("DS_LAUNCHER_APPLY")) {             /* development: what Play would do */

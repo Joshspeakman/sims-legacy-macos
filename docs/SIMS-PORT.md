@@ -94,25 +94,45 @@ time; MoltenVK only with `SIMS_MOLTENVK=<libMoltenVK.dylib>`, for comparison), `
 window), `recomp/tools/build_mac_sims.sh` and `install.sh` (`--nightly` for the Nightly app).
 
 **Screen.** The Legacy Collection keeps its screen as a label, Options > Graphics > Resolution ("1920x1200 (14:9)",
-"1024x768 (4:3)"), saved as the last string of the `Optn` chunk of `UserData/Options.iff` and read at start-up. Only
-its shape is used: 4:3 draws a 4:3 picture with bars, any other a full-width one (up to 16:10); the picture is drawn
-at the window's size, the art and interface scaled to its height (there is no interface-scale setting). The list in
-the game comes from `EnumDisplaySettingsA` (runtime/win32/user32.c). A fresh data folder, and an `Options.iff` older
-than the Legacy Collection's display settings (version 4: no strings), get the default "1024x768 (4:3)": lift.py
-`find_default_resolution` hooks the five pushes of that literal (0x401264, 0x431f14, 0x43251c, 0x4325e7, 0x4335e0)
-and hooks.c gives the game `SIMS_GAME_RES` instead. The launch window edits a saved label only when the shape differs
-(never creating the file: an empty `UserData` is where the game copies its template town, so a file put there first
-leaves the neighbourhood empty). The game pads `Optn` to an even size and may write `rsmp` before the filler chunk.
+"1024x768 (4:3)"), saved as the last string of the `Optn` chunk of `UserData/Options.iff` and read at start-up. The
+label must match an entry of the game's own list exactly (else it takes the whole screen): the screen itself,
+"WxH (q:9)" with q = 9W/H rounded ("4:3" when q is 12), and a 4:3 entry whose width is (8H+3)/6 made even (0x6efd8b,
+0x6effcf; checked: 1602x1202 gives bars, 1603x1202 fills). 4:3 draws a 4:3 picture with bars, any other a full-width
+one. A fresh data folder, and an `Options.iff` older than the Legacy Collection's display settings (version 4: no
+strings), get the default "1024x768 (4:3)": lift.py `find_default_resolution` hooks the five pushes of that literal
+(0x401264, 0x431f14, 0x43251c, 0x4325e7, 0x4335e0) and hooks.c gives the game `SIMS_GAME_RES` instead. The launch window
+edits a saved label only when the shape differs (never creating the file: an empty `UserData` is where the game copies
+its template town, so a file put there first leaves the neighbourhood empty). The game pads `Optn` to an even size and
+may write `rsmp` before the filler chunk; the header's pointer to `rsmp` (offset 60) moves with it.
+
+**Interface size and zoom.** The game draws at its screen's size but lays out its interface and lot at screen / dpi,
+dpi an integer from its `-dpi:<n>` switch (one of 26 allowed: `0xa51ef8`; also `maxaspect`, `monitor`, `w`), by
+default and at most height / 600 (0x6f2b77). Interface and lot scale together; `sims_screen()` (sims_mac.m, also used
+by the launch window for the label) turns `SIMS_UI` (percent of the game's own size) into a screen of
+(layout height x k) with `-dpi:k`, scaled to the display by the layer. The three zoom levels are separate sprite sets
+drawn at native size (crisp at the closest), so zoom between or beyond them would need the engine to scale sprites and
+picking: not done. The game zooms with the mouse wheel (a notch away from you zooms in); a trackpad pinch sends the
+same notches (`SIMS_PINCH=0` turns it off). Frame structure (`VKM_TRACE_ON=<file>`): the lot into a full-size target,
+a 220x183 target, a composite of those and the interface, then the screen.
+
+**Edge scrolling.** The game scrolls with the cursor in its outermost 3 pixels (measured zoomed in: x >= 1021 of 1024;
+with the whole lot on screen it doesn't scroll at all). Within `SIMS_EDGE` points of an edge (8 by default, 0 = the
+game's own) the host puts the cursor on the edge.
+
+**Graphics settings** (single bytes of `Optn` version 8, found by changing each in the game and diffing): Shadows +92,
+Lighting +93, Terrain Detail +94 (0 Low, 1 Medium, 2 High), Interface Effects +103. The launch window reads them (a
+change in the game wins) and writes them in place; before the game has written a version-8 file there is nothing to edit.
 
 **Launch window settings** (passed to the game process as environment): `SIMS_RESOLUTION` = retina (the display's
-pixels, default) | display (its points) | WxH; `SIMS_WINDOWED=1`; `SIMS_NOTCH=below`; `SIMS_FPS=<n>` (a cap in
-`vkm_QueuePresentKHR`; otherwise the display's rate); `SIMS_GAME_RES` (the label above). Measured in test mode,
-steady state: 117 fps uncapped (120 Hz display), 60 / 29 with the caps, 123 fps at 3456x2234.
+pixels, default) | display (its points) | WxH; `SIMS_UI`; `SIMS_WINDOWED=1`; `SIMS_NOTCH=below`; `SIMS_FPS=<n>` (a cap
+in `vkm_QueuePresentKHR`; otherwise the display's rate); `SIMS_GAME_RES` (the label above); `SIMS_EDGE`; `SIMS_PINCH`.
+Measured in test mode, steady state: 117 fps uncapped (120 Hz display), 60 / 29 with the caps, 123 fps at 3456x2234.
 
 **Testing.** `DS_TEST=1` (1024x768 test window; `DS_RESOLUTION=WxH` for others), `DS_CMDFILE` lines `move`, `click`,
-`rclick`, `key`, `type`, `close`, `shot`; `VKM_LOG=1` (Metal backend: render targets and unknown commands);
+`rclick`, `key`, `type`, `wheel`, `close`, `shot`; `VKM_LOG=1` (Metal backend: render targets and unknown commands);
 `W32_REGLOG=1` (registry misses and writes); `DS_LAUNCHER_SHOT=<png>` (the launch window as an image;
-`DS_LAUNCHER_OPEN=display`, `DS_LAUNCHER_PICK=4:3|wide`, `DS_LAUNCHER_APPLY=1` to do what Play does).
+`DS_LAUNCHER_OPEN=display`, `DS_LAUNCHER_PICK=4:3|wide` or `Row Title=value,...`, `DS_LAUNCHER_APPLY=1` to do what
+Play does); `DS_ARGS` (extra command-line switches).
 
 ## Not done / next steps
 
