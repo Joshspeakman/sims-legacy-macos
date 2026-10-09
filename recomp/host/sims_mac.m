@@ -132,6 +132,8 @@ static void key_event(uint16_t code, int down, int repeat)
 @implementation GameWindow
 - (BOOL)canBecomeKeyWindow { return YES; }
 - (BOOL)canBecomeMainWindow { return YES; }
+/* the close button (Window mode): the game is asked to close, as Cmd-Q does, and shows its own Quit dialog */
+- (void)performClose:(id)sender { (void)sender; if (game_hwnd && game_running) post(0x10, 0, 0); else _exit(0); }
 @end
 @interface GameView : NSView @end
 @implementation GameView
