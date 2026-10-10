@@ -36,6 +36,7 @@
 #include <unordered_map>
 #include <mutex>
 #include <condition_variable>
+#include <algorithm>
 #include "spirv_msl.hpp"
 
 static int vlog = -1;
@@ -633,16 +634,27 @@ static VkResult VKAPI_CALL vkm_CreateFence(VkDevice, const VkFenceCreateInfo *ci
 static void VKAPI_CALL vkm_DestroyFence(VkDevice, VkFence f, const VkAllocationCallbacks *) { delete f; }
 static VkResult VKAPI_CALL vkm_ResetFences(VkDevice, uint32_t n, const VkFence *f) { for (uint32_t k = 0; k < n; k++) { std::lock_guard<std::mutex> g(f[k]->m); f[k]->signaled = false; } return VK_SUCCESS; }
 static VkResult VKAPI_CALL vkm_GetFenceStatus(VkDevice, VkFence f) { std::lock_guard<std::mutex> g(f->m); return f->signaled ? VK_SUCCESS : VK_NOT_READY; }
-static void signal(VkFence_T *f) { { std::lock_guard<std::mutex> g(f->m); f->signaled = true; } f->cv.notify_all(); }
+static void signal(VkFence_T *f)
+{
+    std::lock_guard<std::mutex> g(f->m); f->signaled = true;
+    // A waiter may destroy the completed fence as soon as it observes signaled. Finish notifying before
+    // releasing the mutex, so the callback never touches a condition variable that has already been freed.
+    f->cv.notify_all();
+}
 static VkResult VKAPI_CALL vkm_WaitForFences(VkDevice, uint32_t n, const VkFence *f, VkBool32 all, uint64_t timeout)
 {
     auto until = std::chrono::steady_clock::now() + std::chrono::nanoseconds(timeout > (uint64_t)INT64_MAX / 2 ? (uint64_t)INT64_MAX / 2 : timeout);
     for (;;) {
-        uint32_t done = 0; for (uint32_t k = 0; k < n; k++) { std::lock_guard<std::mutex> g(f[k]->m); done += f[k]->signaled; }
+        uint32_t done = 0, pending = 0;
+        for (uint32_t k = 0; k < n; k++) { std::lock_guard<std::mutex> g(f[k]->m); if (f[k]->signaled) done++; else pending = k; }
         if (all ? done == n : done > 0) return VK_SUCCESS;
         if (std::chrono::steady_clock::now() >= until) return VK_TIMEOUT;
-        std::unique_lock<std::mutex> g(f[0]->m);   /* woken by any signal of the first; others are polled */
-        f[0]->cv.wait_for(g, std::chrono::milliseconds(n > 1 ? 1 : 50));
+        // Recheck under the same lock as signal(), closing the gap between the scan and the wait. Bound
+        // polling of other fences by the caller's deadline; a short timeout must not incur a 50 ms sleep.
+        auto wake = until;
+        if (n > 1) wake = std::min(wake, std::chrono::steady_clock::now() + std::chrono::milliseconds(1));
+        std::unique_lock<std::mutex> g(f[pending]->m);
+        f[pending]->cv.wait_until(g, wake, [&] { return f[pending]->signaled; });
     }
 }
 static VkResult VKAPI_CALL vkm_CreateSemaphore(VkDevice, const VkSemaphoreCreateInfo *, const VkAllocationCallbacks *, VkSemaphore *s) { *s = new VkSemaphore_T(); return VK_SUCCESS; }
