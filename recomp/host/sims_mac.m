@@ -215,7 +215,7 @@ static void add_act(uint32_t frame, const char *kind, const char *rest)
 {
     if (nacts >= 4096) return;
     Act *a = &acts[nacts]; memset(a, 0, sizeof *a); a->frame = frame; snprintf(a->kind, sizeof a->kind, "%s", kind);
-    if (!strcmp(kind, "shot")) snprintf(a->path, sizeof a->path, "%s", rest); else sscanf(rest, "%d,%d", &a->x, &a->y);
+    if (!strcmp(kind, "shot") || !strcmp(kind, "type")) snprintf(a->path, sizeof a->path, "%s", rest); else sscanf(rest, "%d,%d", &a->x, &a->y);
     nacts++;
 }
 static void parse_script(void)
@@ -252,8 +252,16 @@ static void script_tick(uint32_t fno)                     // on the game thread,
             if (fno == a->frame + 20) { w32_keys[r ? 2 : 1] = 0x80; post(r ? 0x204 : 0x201, r ? 2 : 1, pos_lp()); }
             if (fno == a->frame + 24) { w32_keys[r ? 2 : 1] = 0; post(r ? 0x205 : 0x202, 0, pos_lp()); }
         } else if (!strcmp(a->kind, "key")) {
-            if (fno == a->frame) { w32_keys[a->x & 0xff] = 0x80; post(0x100, (uint32_t)a->x, 1); }
+            if (fno == a->frame) {
+                w32_keys[a->x & 0xff] = 0x80; post(0x100, (uint32_t)a->x, 1);
+                // AppKit also sends these control characters; text fields need WM_CHAR to accept Enter.
+                if (a->x == 8 || a->x == 9 || a->x == 13 || a->x == 27) post(0x102, (uint32_t)a->x, 1);
+            }
             if (fno == a->frame + 3) { w32_keys[a->x & 0xff] = 0; post(0x101, (uint32_t)a->x, 0xc0000001u); }
+        } else if ((!strcmp(a->kind, "down") || !strcmp(a->kind, "up")) && fno == a->frame) {
+            int down = !strcmp(a->kind, "down");
+            w32_keys[a->x & 0xff] = down ? 0x80 : 0;
+            post(down ? 0x100 : 0x101, (uint32_t)a->x, down ? 1 : 0xc0000001u);
         } else if (!strcmp(a->kind, "wheel") && fno == a->frame) {          /* wheel:<notches>,0 (+ away from you) */
             post(0x20a, ((uint32_t)(int16_t)(120 * a->x) << 16) | buttons, pos_lp());
         } else if (!strcmp(a->kind, "close") && fno == a->frame) { post(0x10, 0, 0);   /* WM_CLOSE, as Cmd-Q / the window's close */
@@ -357,8 +365,8 @@ void sims_screen(int test, int *w, int *h, int *dpi, double *scale, double *notc
 
 @interface AppDelegate : NSObject <NSApplicationDelegate> @end
 @implementation AppDelegate
-- (void)applicationDidBecomeActive:(NSNotification *)n { (void)n; post(0x1c, 1, 0); }
-- (void)applicationDidResignActive:(NSNotification *)n { (void)n; post(0x1c, 0, 0); }
+- (void)applicationDidBecomeActive:(NSNotification *)n { (void)n; if (!test_mode) post(0x1c, 1, 0); }
+- (void)applicationDidResignActive:(NSNotification *)n { (void)n; if (!test_mode) post(0x1c, 0, 0); }
 /* Cmd-Q: the game is asked to close its window (WM_CLOSE), as on Windows; it quits through its own path and
  * game_thread ends the process. Before the game has a window: at once. */
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)s

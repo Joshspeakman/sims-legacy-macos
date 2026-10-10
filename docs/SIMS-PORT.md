@@ -129,14 +129,42 @@ in `vkm_QueuePresentKHR`; otherwise the display's rate); `SIMS_GAME_RES` (the la
 Measured in test mode, steady state: 117 fps uncapped (120 Hz display), 60 / 29 with the caps, 123 fps at 3456x2234.
 
 **Testing.** `DS_TEST=1` (1024x768 test window; `DS_RESOLUTION=WxH` for others), `DS_CMDFILE` lines `move`, `click`,
-`rclick`, `key`, `type`, `wheel`, `close`, `shot`; `VKM_LOG=1` (Metal backend: render targets and unknown commands);
+`rclick`, `key`, `down`, `up`, `type`, `wheel`, `close`, `shot`; `down:<VK>` / `up:<VK>` hold modifiers or arrows,
+`type:<text>` enters text, and `key:13` accepts a text field. Test mode ignores AppKit activation changes so switching
+to a profiler does not pause the game. `VKM_LOG=1` (Metal backend: render targets and unknown commands);
 `W32_REGLOG=1` (registry misses and writes); `DS_LAUNCHER_SHOT=<png>` (the launch window as an image;
 `DS_LAUNCHER_OPEN=display`, `DS_LAUNCHER_PICK=4:3|wide` or `Row Title=value,...`, `DS_LAUNCHER_APPLY=1` to do what
 Play does); `DS_ARGS` (extra command-line switches).
 
+**Fence regression check (macOS, no game assets).** Run `recomp/tests/check_vk_fences.sh` for AddressSanitizer and
+UndefinedBehaviorSanitizer, or `SANITIZE=thread recomp/tests/check_vk_fences.sh` for ThreadSanitizer. It exercises
+finite deadlines, already-signaled fences, wait-any/all, concurrent completion, and destruction immediately after
+completion. The previous backend could lose a completion notification between its state check and sleep, and even
+a 1 ms timeout entered an unconditional 50 ms wait (60.0 ms measured on this Mac). Waiting with a predicate under
+the fence mutex and bounding the sleep by the requested deadline reduced that reproducer to about 1.5 ms. The
+completion callback finishes notification before a waiter can destroy the fence. These are synchronization fixes;
+the microbenchmark does not establish a gameplay FPS increase.
+
+**Original-game comparison (2026-10-10).** The reference host's [reference issue](https://github.com/Joshspeakman/sims-legacy-macos/issues/1)
+uses the unchanged Steam build 17905164 at 800x600, original Vulkan under CachyOS Proton 11.0 on an RTX 3080 Ti.
+It is an original-game comparison, not native Windows coverage. The source executable hash matches this Mac's
+Steam copy (`b7c8765ed2383cbda8c047694d54a21d97895c8dae57dcc87716ca6e78b342e3`). Terrain High, Lighting, Shadows
+and Interface Effects settings match. The neighborhood and Newbie home at noon and 10:02 p.m. reproduce the
+reference's terrain, furniture, Sim bodies/portraits, darkened yard, and illuminated lamp. Sim positions, cutaway
+walls and animation phases vary with the live simulation; this is feature comparison, not a pixel identity claim.
+The vacant Sunflower Home pool also reproduces the cyan water, edge shading, ladders, diving board and surrounding
+walls/windows. Both pool comparisons are daylight Build/Buy previews with simulation stopped; live swimming, waves
+and night pool lighting are outside this reference's coverage. No shader change was justified by these scenes.
+
+In a 20-second live Newbie night scene on the M1 Pro, 1,185 presented frames over 19.806 seconds between captured
+frames gave 59.83 fps at the 60 fps cap, with about 51% of one CPU core used by the whole process. A separate CPU
+sample was dominated by lifted game code and the existing frame-cap sleep, with a smaller share in Metal command
+encoding. It does not establish a specific guest function's purpose or justify changing shader/descriptor behavior.
+No GPU timing or uncapped before/after FPS improvement is claimed for this audit.
+
 ## Not done / next steps
 
-1. The Mac: compare a full session with the reference host's capture (36 screenshots, after the launch-window work).
+1. Broader Mac/original comparisons beyond the stock Newbie and pool references: expansion destinations and larger households.
 2. The game's own animated cursors (`LoadCursorFromFileA` of `.ani` files) show as the system arrow.
 3. Drag-and-drop of the game's window between displays (the screen is chosen at start-up).
 4. **Remaining imports** (`python3 recomp/tools/import_gap.py recomp/work/sims/Sims.exe`): 58, none reached in
@@ -146,7 +174,8 @@ Play does); `DS_ARGS` (extra command-line switches).
    reports an SSE2 CPU, so they aren't taken), `enter` with nesting, segment registers in junk decodes.
 6. Not yet tried: build mode walls and floors, Downtown / Vacation / Studio Town and the other expansion
    destinations, pets, a whole Sim life (jobs, skills, ageing via the expansions).
-7. The marked Newbie house's roof (700,338 in the test window) doesn't open its lot; other lots do.
+7. The marked Newbie lot opens at the reference's 800x600 neighborhood position (590,255); the older failed roof-click
+   observation was not reproduced in this audit.
 
 ## Ground rules
 
