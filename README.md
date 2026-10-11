@@ -14,7 +14,7 @@ Vegas).
 
 ## Status
 
-**Playable, early (2026-10-10).** `main` and `nightly` are currently the same commit; there is no tagged release yet.
+**Playable, early (2026-10-10).** The code on `main` and `nightly` is currently the same; there is no tagged release yet.
 
 The recompiled game runs the neighbourhood, Select a Family, Create a Family and Create a Sim, lots in live and buy
 mode (Sims walking, pie menus, visitors, day turning to night), saving, and music. A 40-minute run at the fastest
