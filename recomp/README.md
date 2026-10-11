@@ -1,82 +1,69 @@
-# Recompiler: Dungeon Siege II as native code
+# Recompiler and runtime: The Sims Legacy Collection as native code
 
-Static recompilation of the user's own GOG 2.3 `DungeonSiege2.exe` (and the Miles and Bink DLLs in its folder) into
-C, compiled for Apple Silicon or Linux x86-64. Linux build status and instructions are in the
-[root README](../README.md); the tables and shader notes below describe the upstream Mac implementation. Nothing derived from the game is committed: `build.sh` regenerates everything locally
-from the user's files. Installing and playing: [README](../README.md); plan and open work: [docs/PLAN.md](../docs/PLAN.md).
+Static recompilation of the user's own Steam copy of The Sims Legacy Collection (`Sims.exe`, and `gimex.dll` and
+`ijl10.dll` from its folder) into C, compiled for Apple Silicon (Metal) or Linux x86-64 (SDL and the system's Vulkan).
+Nothing derived from the game is committed: the scripts regenerate everything under `recomp/work/` (git-ignored) from
+the user's files. Installing and playing: the [root README](../README.md). The port's notes and open work:
+[docs/SIMS-PORT.md](../docs/SIMS-PORT.md).
+
+This tree was inherited from the author's Dungeon Siege II and Fallout: New Vegas ports. Their scripts and runtime files
+(`build.sh`, `build_fnv.sh`, `fnv_imports.c`, the Direct3D 9 code, ...) are still here, but The Sims build doesn't use
+them.
+
+## Building by hand
+
+`install.sh` does this. By hand:
 
 ```sh
-recomp/build.sh "/path/to/Dungeon Siege 2/DungeonSiege2.exe"   # -> recomp/work/full/libgame.dylib (about 10 minutes)
-recomp/tools/build_app.sh recomp/work/full
-recomp/run.sh "/path/to/Dungeon Siege 2"
+recomp/build_sims.sh "/path/to/The Sims Legacy Collection/Sims.exe"   # -> recomp/work/sims/app/SimsNative (Linux: SimsLinux)
 ```
 
-## Status
+`build_sims.sh` checks `Sims.exe` (Steam build 17905164, SHA-256 `b7c8765e…42e3`; `SIMS_ANY_BUILD=1` accepts another),
+unwraps Steam's SteamStub 3.1 wrapper from a copy (`tools/steamstub.py`), then analyses (`tools/analyze.py`: 40,022
+functions, 96.1% of `.text`), lifts (`tools/lift.py --game sims`), does the same for `gimex.dll` and `ijl10.dll`
+(`ijl10.dll` is lifted from a copy relocated to `0x61000000` by `tools/rebase_pe.py`), compiles everything with clang
+(`SIMS_BUILD_JOBS=n` parallel jobs) and links it with the runtime (`tools/build_runtime.sh`; on the Mac
+`tools/build_mac_sims.sh`). `SIMS_RELINK=1 recomp/build_sims.sh ...` relinks after runtime-only changes.
 
-| Step | State |
-|---|---|
-| Analysis (`tools/analyze.py`) | 85,833 functions, 97.1% of `.text`; 479 jump tables resolved, 73 bounded heuristically |
-| Lifter (`tools/lift.py`), runtime core (`runtime/`) | the whole executable and its DLLs compile and link (89,293 functions) |
-| Win32 layer (`runtime/win32`): loader, memory, heaps, threads, SEH, files, registry, USER32 (with timers), GDI, DbgHelp, WSOCK32 (`winsock.c`) | working |
-| Direct3D 9 (`d3d9.c`, `d3d9_fmt.c`) on the Metal renderer (`../src/renderer`), D3DX textures (`d3dx9.c`) | working: fixed function, and the game's HLSL effects compiled to Metal (`hlsl.c`, `d3dx9_fx.c`) |
-| Miles 6.6g (`mss32.dll` and its providers) and Bink, recompiled from the game folder; DirectSound over Core Audio | working |
-| App bundle, installer (`../install.sh`), launch window (`host/launcher.m`) | working |
-| Multiplayer (DirectPlay 8, GameSpy lobby on OpenSpy) | switched back on: the lobby works with an original CD key; hosting and joining untested (`../docs/MULTIPLAYER.md`) |
+## What's where
 
-The recompiled game runs without Wine or Rosetta: intro, menus, new hero, the campaign, saving and loading.
-
-Test mode: `DS_TEST=1` (background window, no mouse capture, no launch window), `W32_AUDIO_MUTE=1`,
-`DS_SCRIPT="@20:click:402,264;@30:shot:/tmp/a.png"` (scripted input in the game's display-mode coordinates; also
-`move`, `rclick`, `press`, `key`, `type`), `DS_RESOLUTION=WxH`. Logs: `D3D9_LOG=1|2` (Direct3D calls), `D3D9_FPS=1`,
-`W32_TRACE=<file>` (every Windows call), `W32_SEHLOG=1` (exceptions and the SEH chain), `W32_VMLOG=1`,
-`W32_REGLOG=1` (registry keys not found), `W32_AUDIOLOG=1`. Crash and hang reports go to `<data>/CrashReports`.
-
-Shader effects (`runtime/win32/hlsl.c`, `d3dx9_fx.c`; the game's Options → Video → Shaders, saved as `shaders = ...` in
-`Save/prefs.gas`): `DS2_SHADERS=0` turns them off (the Radeon 8500 identity, fixed function only). Development:
-`FX_PARAMLOG=1` (each parameter's first and first non-zero value), `FX_FOGLOG=1` (fog parameter changes),
-`FX_DUMP=n` (every parameter at the first n passes of each effect), `D3D9_TEXLOG=n` (texture binding during effect
-passes), `HLSL_MAGENTA=1` (effect pixels drawn magenta), `DSR_FXPATCH="old=>new||old=>new"` (text replaced in every
-effect program's Metal before compiling), `DSR_FXTEXLOG=n` (fog, alpha and textures at effect draws), `DSR_RTLOG=n`
-(render target changes and clears), `DSR_SHOWSURF=<surface id>` (that surface drawn in the screen's corner),
-`DSR_GLOWLOG=1` (draws into and out of effect render targets, which are shown in the screen's corner),
-`D3D9_FXSTATELOG=1` (states the game changes between an effect's Begin and End that the effect doesn't own).
-`D3D9_STATELOG=1` (each render and stage state value the game uses, once). `tests/hlsl_check.m` compiles every pass of
-`.fx` files with Metal (`HLSL_DUMP=<technique>` prints its source); `tests/fx_render_test.m <folder with the .fx files>`
-renders the game's pixel shaders with known inputs and checks their results (glow taps and weights, shadow blur, heat
-shimmer, Dot3, ice, specular, water, sampler slots, XRGB alpha).
-
-Native hot loops (`runtime/win32/native.c`, entered through `tools/lift.py` HOOKS and OVERRIDES): the vertex lighting
-of directional lights and the terrain's 3x3 vertex transform, bit-identical to the original. `DS2_NATIVE=0` runs the
-recompiled original instead, `DS2_NATIVE_CHECK=1` runs both and reports any difference, `DS2_NATIVE_PROF=1` prints
-the lighting loop's time. `DSR_CAPLOG=1` prints the game's work per frame that the automatic frame cadence (120/60) is
-chosen from.
+- `tools/`: the recompiler (`analyze.py`, `lift.py`, `sse.py`, `link_tables.py`), `steamstub.py`, `gen_vulkan.py`
+  (the Vulkan thunks), and the app helpers (`extract_icon.py`, `sims_art.py`).
+- `runtime/rt.c`, `rt.h`, `rt_sse.h`: the execution model below. `runtime/edition.h`: the per-game profile
+  (`SIMS_EDITION`).
+- `runtime/win32/`: the Windows APIs: loader, memory, heaps, threads, SEH, files, registry, USER32, GDI, DirectSound,
+  the game's own imports (`sims_imports.c`), the offline Steam (`steam_api.c`), and Vulkan (`vulkan.c`, and the
+  generated `vulkan_gen.c` that converts the 32-bit game's structures).
+- `host/sims_mac.m` (the Mac host: window, input, crash reports), `host/vk_metal.mm` (Vulkan on Metal) and
+  `host/launcher.m` (the launch window). `host/linux.c`: the Linux host.
+- `third_party/`: the Vulkan headers and registry, SPIRV-Cross (the game's shaders to Metal at run time), minimp3,
+  MojoShader (linked but unused by The Sims).
 
 ## Execution model
 
-- **Memory:** one 4 GB host region; guest address = offset. The image sits at its preferred base `0x400000`, so all
-  pointers the game stores (vtables, saves, its own structures) keep their 32-bit values.
+- **Memory:** one 4 GB host region; guest address = offset. The image sits at its preferred base `0x400000`, so the
+  pointers the game stores keep their 32-bit values.
 - **Functions:** one C function per original function. Registers are C locals, written back to a per-thread context
-  around calls. The guest stack is real (`call` pushes the original return address; arguments are read where the
-  original reads them), so calling conventions, `this` pointers and stack-walking code behave as before.
-- **Flags:** lazy — flag-setting instructions record their operands; consumers (`jcc`, `setcc`, `adc`, `sahf` …)
-  compute only the flags they need.
-- **x87:** eight doubles + TOP + control/status words, the precision model this game was measured to run with under
-  Rosetta: double arithmetic, float rounding at 32-bit stores, `fist(p)` honouring the rounding
-  mode. x87 register forms are decoded from the opcode bytes (Intel semantics), not from disassembler text.
-- **Indirect calls/jumps:** an address → function table; jump tables become `switch` statements; imports are dispatched
-  through `rt_import` (IAT slots hold thunk addresses, so a call through a register still lands there).
-- Junk decodes (data read as code) and padding become `rt_unhandled()` traps.
+  around calls. The guest stack is real, so calling conventions, `this` pointers and stack-walking code behave as
+  before.
+- **Flags:** lazy: flag-setting instructions record their operands; consumers compute only the flags they need.
+- **x87:** eight doubles with TOP and the control/status words; transcendentals use the host math library.
+- **Indirect calls and jumps:** an address to function table; jump tables become `switch` statements; imports go
+  through `rt_import`.
+- **Exceptions:** SEH4 through the game's own handlers.
+- **CPU:** `cpuid` reports an SSE2-only CPU, so the executable's SSE4.1 and AVX paths are never taken. Instructions the
+  lifter doesn't support become traps that name their address.
+- **Vulkan memory:** the game's mapped memory is shared with the GPU (on the Mac, guest pages as Metal buffers); see
+  "Mapped memory" in the port notes.
 
-## Verification and known gaps
+## Testing
 
-The instruction-level harness (`tests/harness.py`, `tests/fuzz_insn.py`, `tests/test_slice.py`) comes from the
-Dungeon Siege 1 port, where every instruction form the game used was checked bit-for-bit against Unicorn; it has not
-been re-run on DS2's instruction mix yet. DS2 has been checked by playing: menus, hero creation, movies, the opening
-of the campaign, save/load, and a 6-minute random-input soak.
-
-- **SEH:** access violations and RaiseException go through the game's handlers. First touches of reserved archive
-  pages pass over C++ `catch(...)` frames (the game reads archives inside them); C++ catch continuations are not
-  implemented, and the game has not needed them so far.
-- **Indirect calls** to addresses outside the function table stop the game with the address logged (add it as a
-  seed in `work/observed_targets.json` and rebuild).
-- **x87 tag word** is not modelled; transcendentals use the host math library.
+- Test mode: `DS_TEST=1` (a test window, no launch window), `DS_RESOLUTION=WxH`, `DS_SCRIPT` and `DS_CMDFILE`
+  (scripted input), `W32_VK_SHOT`/`W32_VK_SHOT_AT` (screenshots), `W32_TRACE=<file>`; the full list is under
+  "Testing" in [docs/SIMS-PORT.md](../docs/SIMS-PORT.md).
+- `tests/sims_smoke.py`: a first check of a build (a fresh data folder to the neighbourhood).
+- `tests/check_vk_fences.sh`: the Metal backend's fence waits under AddressSanitizer/UBSan (`SANITIZE=thread` for
+  ThreadSanitizer); no game files needed.
+- `tests/check_linux.sh`: the Linux checks run in CI.
+- On Linux, `tools/sims_iterate.sh` (relink and one test run) and `tools/sims_session.sh` (a long run driven from
+  outside); set `SIMS_GAME` to your game folder.
