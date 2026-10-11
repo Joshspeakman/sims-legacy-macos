@@ -14,7 +14,8 @@ Vegas).
 
 ## Status
 
-**Playable, early (2026-10-10).** The code on `main` and `nightly` is currently the same; there is no tagged release yet.
+**Beta 1.** This is an early, playable beta. See the [release notes](https://github.com/Joshspeakman/sims-legacy-macos/releases/tag/beta-1)
+for installation instructions and known issues.
 
 The recompiled game runs the neighbourhood, Select a Family, Create a Family and Create a Sim, lots in live and buy
 mode (Sims walking, pie menus, visitors, day turning to night), saving, and music. A 40-minute run at the fastest
