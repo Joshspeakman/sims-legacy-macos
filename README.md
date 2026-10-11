@@ -5,8 +5,8 @@ draws with Vulkan, and the app runs that Vulkan directly on Metal: MoltenVK isn'
 emulator.
 
 Nothing from the game is in this repository. `install.sh` reads your Steam copy, recompiles its executable on your
-Mac, and builds an app that reads the game's data from your folder. The game folder is only read; nothing is written
-into it.
+Mac, and builds an app that reads the game's data from your folder. Recompilation and play only read the game folder.
+The optional `--steamcmd` step downloads or updates files in its destination game folder.
 
 The recompiler and Windows runtime come from the author's earlier ports
 ([dungeon-siege-macos](https://github.com/Joshspeakman/dungeon-siege-macos), then Dungeon Siege II and Fallout: New
@@ -32,7 +32,9 @@ What's verified and how, and the Mac notes: [docs/SIMS-PORT.md](docs/SIMS-PORT.m
 - **The Xcode command line tools**: `xcode-select --install`. They provide clang, git and python3.
 - **An internet connection while installing**: the build installs two Python packages (Capstone, Unicorn) into
   `recomp/.venv`, and the launch window's artwork is downloaded from the game's Steam store page.
-- **Time:** a few minutes to build. Each build redoes the whole recompilation.
+- Build time and peak disk use have not been verified for a clean install. Allow room for your game files,
+  generated source and object files, the app, and additional update worktrees; time varies with the Mac. Normal installs
+  redo the whole recompilation.
 - **Your own copy of The Sims Legacy Collection from Steam**, exactly the build below.
 
 ### The supported game build
@@ -52,17 +54,22 @@ the rest.
 
 ### Getting the Windows game files onto your Mac
 
-The Legacy Collection is Windows-only on Steam, so the Mac Steam client won't download it. Any of these works:
+Use a complete Windows installation of the Legacy Collection. The available routes are:
 
 - **Copy it from a Windows PC:** copy the whole folder `steamapps/common/The Sims Legacy Collection` to the Mac, for
   example to `~/Games/The Sims Legacy Collection`.
 - **A CrossOver or Whisky Steam library:** `install.sh` finds the game there by itself (see below).
-- **SteamCMD:** `./install.sh --steamcmd <your Steam user name>` downloads the Windows build you own. It needs
+- **SteamCMD:** `./install.sh --steamcmd "YOUR_STEAM_USERNAME"` downloads the Windows build you own. It needs
   `steamcmd` on your `PATH` (Valve's [SteamCMD for macOS](https://developer.valvesoftware.com/wiki/SteamCMD#macOS), or
   `brew install --cask steamcmd`). SteamCMD asks for your password and Steam Guard code itself; nothing is stored by
-  this project. This path hasn't been tested on Apple Silicon, and the macOS SteamCMD may need Rosetta
-  (`softwareupdate --install-rosetta`). SteamCMD downloads Steam's current build, so if Steam has moved past build
-  17905164, the build refuses it (above).
+  this project. Replace `YOUR_STEAM_USERNAME` with your account name. This
+  download route has not been tested on Apple Silicon. Valve's
+  [macOS download](https://steamcdn-a.akamaihd.net/client/installer/steamcmd_osx.tar.gz), inspected on 2026-10-10,
+  contains an Intel (`x86_64`) executable and needs [Rosetta](https://support.apple.com/en-us/102527)
+  (`softwareupdate --install-rosetta`). The recompiled game runs natively. A manual SteamCMD install provides
+  `steamcmd.sh`; this installer requires a command named `steamcmd` on `PATH`, as provided by the
+  [Homebrew package](https://formulae.brew.sh/cask/steamcmd). SteamCMD downloads Steam's current build; if its
+  executable no longer matches the supported hash, the build refuses it (above).
 
 Without `--game-dir`, `install.sh` uses the game folder of an app it installed before, or looks in:
 `~/Games/The Sims Legacy Collection`, CrossOver and Whisky bottles'
@@ -79,12 +86,14 @@ so it is for your own Mac: don't share it.
 
 ## Install
 
+Keep the clone in a path without spaces: the current compile scripts split source paths on whitespace.
+
 ```sh
 xcode-select --install                     # once, if you don't have the command line tools
 git clone https://github.com/Joshspeakman/sims-legacy-macos.git
 cd sims-legacy-macos
 ./install.sh --game-dir "/path/to/The Sims Legacy Collection"
-# or: ./install.sh --steamcmd <your Steam user name>
+# or: ./install.sh --steamcmd "YOUR_STEAM_USERNAME"
 ```
 
 This recompiles the game and installs **The Sims Legacy Native** in `~/Applications` (it shows as "The Sims"). Open it
@@ -114,6 +123,7 @@ compile jobs; default all cores).
 | Your neighbourhoods and the game's options | `~/Games/SimsNative/drive_c/Users/player/Saved Games/Electronic Arts/The Sims 25` (`UserData`, `UserData2` ...) |
 | Launch window settings | `~/Games/SimsNative/launcher.plist` |
 | Log | `~/Games/SimsNative/SimsNative.log` (both apps write to it) |
+| Update output | `~/Games/SimsNative/update.log` |
 | Crash reports | `~/Games/SimsNative/CrashReports` |
 | Build files | `recomp/work/` and `recomp/.venv` inside the clone; `build/` for the updater's worktrees |
 
@@ -128,13 +138,13 @@ The app opens with a launch window in the game's blue, with its Steam art. Your 
   4:3 (bars at the sides). This edits the game's own Resolution setting; a change made in the game's Options shows
   here too.
 - **Display**
-  - **Resolution**: Retina (every pixel: the sharpest, and the default) or Standard (the display's size in points,
+  - **Resolution**: Retina (every pixel: the sharpest, and the default on a Retina display) or Standard (the display's size in points,
     lighter on the GPU).
   - **Interface Size**: 50% to 120% of the game's own size for the screen. Larger gives a larger interface and a closer
     view of the lot; smaller shows more of the lot.
   - **Window**: Full Screen or a Window you can move and resize.
   - **Notch** (only on displays with one): Below the Notch, or Whole Display.
-  - **Frame Rate**: the display's (up to 120 on ProMotion), 60 or 30 fps.
+  - **Frame Rate**: the display's (up to 120 on ProMotion), 60 (offered separately on displays above 60 Hz) or 30 fps.
 - **Graphics**: the game's own Shadows, Lighting, Interface Effects (on/off) and Terrain Detail (High, Medium, Low),
   written into its settings file. They take effect from the second start: the game makes that file the first time.
 - **Controls**: Edge Scrolling (Easy, the default: the pointer within 8 points of an edge scrolls; Easiest: 20 points;
@@ -154,7 +164,8 @@ game copy with the same game, app and data folders, and reinstalls it. Saves and
 the clone must still be where you installed it from, and `git` must be able to fetch from GitHub without asking for a
 password.
 
-**By hand:** `git pull` in the clone, then `./install.sh` (it reuses the game folder of the installed app).
+**By hand:** `git pull` in the clone, then repeat the original install command with the same game, app and data
+folders. For Nightly, keep the clone on `nightly` and include `--nightly`; the flag alone does not switch branches.
 
 ## Uninstall
 
@@ -162,7 +173,7 @@ password.
 2. Delete the clone (it holds the build folder).
 3. Delete `~/Games/SimsNative` only if you don't want to keep your neighbourhoods.
 
-Your game folder was never changed.
+Recompilation and play leave the game folder unchanged; `--steamcmd` downloads or updates it.
 
 ## Known issues
 
@@ -215,7 +226,7 @@ Needs clang, python3, SDL2, and the game installed by Steam (app 3314060, build 
 
 ```sh
 G="$HOME/.local/share/Steam/steamapps/common/The Sims Legacy Collection"   # or your Steam library
-recomp/build_sims.sh "$G/Sims.exe"                  # -> recomp/work/sims/app/SimsLinux (about 4 minutes)
+recomp/build_sims.sh "$G/Sims.exe"                  # -> recomp/work/sims/app/SimsLinux
 recomp/work/sims/app/SimsLinux --exe recomp/work/sims/Sims.exe --game "$G" --data ~/Games/SimsNative
 ```
 
