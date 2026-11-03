@@ -1,5 +1,5 @@
 #!/bin/bash
-# install.sh [--game-dir <The Sims Legacy Collection folder>] [--app-dir DIR] [--data-dir DIR] [--nightly]
+# install.sh [--game-dir <The Sims Legacy Collection folder>] [--app-dir DIR] [--data-dir DIR] [--nightly] [--in-place]
 # install.sh --steamcmd <Steam user name> [--game-dir DIR]
 #
 # Builds the natively recompiled The Sims Legacy Collection from your own Steam copy and installs
@@ -24,7 +24,9 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 GAME=""; APPS="$HOME/Applications"; DATA="$HOME/Games/SimsNative"; STEAMUSER=""
 APP_NAME="The Sims Legacy Native"; APP_SHOWN="The Sims"; APP_LOG=SimsNative; U_BRANCH=main; APP_ID=native
+IN_PLACE=""
 while [ $# -gt 0 ]; do
+  case "$1" in --in-place) IN_PLACE=1; shift; continue;; esac
   case "$1" in
     --game-dir) GAME="$2"; shift 2;; --app-dir) APPS="$2"; shift 2;; --data-dir) DATA="$2"; shift 2;;
     --steamcmd) STEAMUSER="$2"; shift 2;;
@@ -71,6 +73,17 @@ mkdir -p "$DATA"
 mkdir -p "$APPS"; rm -rf "$A"; mkdir -p "$A/Contents/MacOS" "$A/Contents/Resources"
 cp "$W/app/SimsNative" "$A/Contents/MacOS/"
 cp "$W/Sims.exe" "$A/Contents/Resources/Sims.exe"            # the unwrapped copy the app maps (never leaves this Mac)
+# The game is copied into the data folder (game-files) and the app reads it from there, so the folder it was installed
+# from is no longer needed and can be deleted. On a Mac the copy is an APFS clone: it takes no extra space. Updates and
+# reinstalls keep using the copy. --in-place reads the given folder instead (nothing is copied).
+if [ -z "$IN_PLACE" ]; then case "$GAME/" in "$DATA"/*) ;; *)
+  GF="$DATA/game-files"; echo "== copying the game from $GAME into $GF"
+  mkdir -p "$DATA"; rm -rf "$GF.part"
+  if [ "$(uname -s)" = Darwin ]; then cp -cRL "$GAME" "$GF.part" 2>/dev/null || { rm -rf "$GF.part"; cp -RL "$GAME" "$GF.part"; }
+  else cp -RL --reflink=auto "$GAME" "$GF.part"; fi
+  rm -rf "$GF"; mv "$GF.part" "$GF"
+  echo "== the app reads the game from $GF: $GAME is no longer needed (delete it to free the space)"; GAME="$GF";;
+esac; fi
 Q_GAME=$(printf '%q' "$GAME"); Q_DATA=$(printf '%q' "$DATA")
 # updates from the launch window: the commit this app was built from and the checkout it was installed from; its
 # updater fetches the branch from GitHub into a worktree there (build/stable or build/nightly) and rebuilds the app
