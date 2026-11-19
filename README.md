@@ -268,3 +268,9 @@ Valve. You need your own copy of the game. Nothing from the game is distributed 
 files.
 
 The code in this repository is under the MIT license ([LICENSE](LICENSE)).
+
+## Support
+
+If you get some use out of this, you can buy me a coffee on Ko-fi.
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/speakerjosh)
