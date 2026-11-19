@@ -1,0 +1,45 @@
+{
+  "name": "The Sims",
+  "folder": "The Sims",
+  "bundle_id": "io.github.joshspeakman.sims-legacy",
+  "release_repo": "Joshspeakman/sims-legacy-macos",
+  "binary": "The Sims",
+  "icon_label": "SIMS",
+  "version": "Legacy Collection (Steam)",
+  "where": "Your The Sims Legacy Collection folder from Steam's Windows version (app 3314060)",
+  "minutes": 6,
+  "space_gb": 4,
+  "build_gb": 2,
+  "exe": "Sims.exe",
+  "exe_sha256": {
+    "b7c8765ed2383cbda8c047694d54a21d97895c8dae57dcc87716ca6e78b342e3": {
+      "version": "Legacy Collection (Steam build 17905164)",
+      "patch": [["steamstub.py", "{exe}", "{exe}"]]
+    }
+  },
+  "required": ["GameData", "UIGraphics", "SoundData", "gimex.dll", "ijl10.dll"],
+  "libs": [
+    {"file": "gimex.dll"},
+    {"file": "ijl10.dll", "rebase": "0x61000000"}
+  ],
+  "tag_lowercase": false,
+  "lift_args": ["--game", "sims"],
+  "cc_args": ["-fPIC", "-DRT_HOST_RC_INIT=UINT32_MAX"],
+  "art": ["sims_art.py", "{art}"],
+  "log": "SimsNative",
+  "local_network": "The Sims doesn't use your local network.",
+  "build": "./build_sims.sh \"$GAME/Sims.exe\"",
+  "out": "work/sims",
+  "rt_opt": "-O1 -ffp-contract=off",
+  "rt_cflags": ["-DSIMS_EDITION"],
+  "host_main": "host/sims_mac.m",
+  "host_cflags": ["-DSIMS_EDITION"],
+  "host_includes": ["third_party/vulkan/include"],
+  "extra_obj_dirs": ["obj/spirv-cross"],
+  "app_files": [],
+  "link_flags": ["-lc++"],
+  "frameworks": ["AppKit", "Metal", "QuartzCore", "CoreText", "CoreGraphics", "CoreFoundation", "AudioToolbox", "CoreImage"],
+  "style": "stone",
+  "title": "THE SIMS",
+  "art_url": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/3314060/library_hero.jpg"
+}
