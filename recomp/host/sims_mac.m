@@ -430,6 +430,12 @@ int main(int argc, char **argv)
                 setenv("DS_BUILT_COMMIT", [pl[@"built"] ?: @"" UTF8String], 1);
             }
         }
+#ifdef DS_EASY_INSTALL
+        if (!exe && !game && !data) {                                 /* the downloaded app: setup builds the game from the player's copy */
+            int ds_easy_install(const char **, const char **, const char **);   /* setup/setup_ui.m: returns only when the game is ready */
+            ds_easy_install(&exe, &game, &data);
+        }
+#endif
         if (!exe || !game || !data) { fprintf(stderr, "usage: SimsNative --exe <Sims.exe> --game <game folder> --data <data folder>\n"); return 1; }
         char drive_c[1024], overlay[1024];
         snprintf(drive_c, sizeof drive_c, "%s/drive_c", data); snprintf(overlay, sizeof overlay, "%s/game", data);
