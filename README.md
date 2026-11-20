@@ -1,5 +1,7 @@
 # The Sims Legacy Collection for Apple Silicon Macs
 
+![The Sims Legacy Collection, native on Apple Silicon](media/hero.jpg)
+
 [![Buy me a Continue on Ko-fi](https://img.shields.io/badge/Buy_me_a_Continue_%7C_%245-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/speakerjosh)
 
 The Sims Legacy Collection (Steam, 2025), statically recompiled from your own copy into native arm64 code. The game
@@ -13,6 +15,13 @@ The optional `--steamcmd` step downloads or updates files in its destination gam
 The recompiler and Windows runtime come from the author's earlier ports
 ([dungeon-siege-macos](https://github.com/Joshspeakman/dungeon-siege-macos), then Dungeon Siege II and Fallout: New
 Vegas).
+
+## Screenshots
+
+| | |
+|---|---|
+| ![The launch window](media/screenshots/screenshot-launcher.png) | ![Neighbourhood](media/screenshots/screenshot-01-neighbourhood.jpg) |
+| ![House](media/screenshots/screenshot-02-house.jpg) |  |
 
 ## Status
 
