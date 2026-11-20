@@ -526,7 +526,14 @@ static id<MTLFunction> stage_function(id<MTLDevice> dev, VkShaderModule_T *m, in
             msl = c.compile();
             m->entry[stage] = c.get_cleansed_entry_point_name(entry, model);
         } catch (const std::exception &e) { fprintf(stderr, "vkm: shader translation failed: %s\n", e.what()); return nil; }
-        NSError *err = nil; MTLCompileOptions *co = [MTLCompileOptions new]; co.languageVersion = MTLLanguageVersion2_3; co.mathMode = MTLMathModeSafe;
+        NSError *err = nil; MTLCompileOptions *co = [MTLCompileOptions new]; co.languageVersion = MTLLanguageVersion2_3;
+        if (@available(macOS 15.0, *)) co.mathMode = MTLMathModeSafe;   /* no fast math: the game's results as on Vulkan */
+        else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+            co.fastMathEnabled = NO;                                    /* macOS 14: the same, by its older name */
+#pragma clang diagnostic pop
+        }
         m->lib[stage] = [dev newLibraryWithSource:[NSString stringWithUTF8String:msl.c_str()] options:co error:&err];
         if (!m->lib[stage]) { fprintf(stderr, "vkm: Metal didn't compile a %s shader: %s\n", stage ? "fragment" : "vertex", err.localizedDescription.UTF8String); return nil; }
         LOG("shader %p (%zu words): %s function %s\n", (void *)m, m->spv.size(), stage ? "fragment" : "vertex", m->entry[stage].c_str());
