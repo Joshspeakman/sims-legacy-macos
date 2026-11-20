@@ -1,5 +1,7 @@
 # The Sims Legacy Collection for Apple Silicon Macs
 
+![The Sims Legacy Collection, native on Apple Silicon](media/hero.jpg)
+
 The Sims Legacy Collection (Steam, 2025), statically recompiled from your own copy into native arm64 code. The game
 draws with Vulkan, and the app runs that Vulkan directly on Metal: MoltenVK isn't needed. No Wine, no Rosetta, no
 emulator.
@@ -11,6 +13,13 @@ The optional `--steamcmd` step downloads or updates files in its destination gam
 The recompiler and Windows runtime come from the author's earlier ports
 ([dungeon-siege-macos](https://github.com/Joshspeakman/dungeon-siege-macos), then Dungeon Siege II and Fallout: New
 Vegas).
+
+## Screenshots
+
+| | |
+|---|---|
+| ![The launch window](media/screenshots/screenshot-launcher.png) | ![Neighbourhood](media/screenshots/screenshot-01-neighbourhood.jpg) |
+| ![House](media/screenshots/screenshot-02-house.jpg) |  |
 
 ## Status
 
