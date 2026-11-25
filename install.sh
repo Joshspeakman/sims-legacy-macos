@@ -145,7 +145,7 @@ cat > "$A/Contents/Info.plist" <<PLIST
 </dict></plist>
 PLIST
 # the launch window's art (recomp/tools/sims_art.py): the game's logo, background and banner from its Steam store page
-if python3 "$HERE/recomp/tools/sims_art.py" "$DATA/art" && [ -n "$(ls "$DATA/art" 2>/dev/null)" ]; then cp -R "$DATA/art" "$A/Contents/Resources/art"; fi
+if python3 "$HERE/recomp/tools/sims_art.py" "$DATA/art" "$GAME" && [ -n "$(ls "$DATA/art" 2>/dev/null)" ]; then cp -R "$DATA/art" "$A/Contents/Resources/art"; fi
 I="$(mktemp -d)"                                              # the icon: the game's own, from Sims.exe
 if python3 "$HERE/recomp/tools/extract_icon.py" "$GAME/Sims.exe" "$I/sims.ico" 2>/dev/null && sips -s format png "$I/sims.ico" --out "$I/sims.png" >/dev/null 2>&1; then
   sips -z 512 512 "$I/sims.png" --out "$I/sims512.png" >/dev/null && sips -s format icns "$I/sims512.png" --out "$A/Contents/Resources/icon.icns" >/dev/null 2>&1 || true

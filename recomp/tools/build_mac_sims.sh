@@ -40,6 +40,6 @@ done
 FAIL=0; for p in ${PIDS[@]+"${PIDS[@]}"}; do wait "$p" || FAIL=1; done
 [[ $FAIL == 0 ]] || { echo "build_mac_sims.sh: the Metal Vulkan or SPIRV-Cross failed to compile (above)"; exit 1; }
 "$CC" -o "$OUT/app/SimsNative" "$OUT"/obj/*.o "$OUT"/obj/rt/*.o "$OUT"/obj/rt/mojo/*.o "$OUT/obj/host/sims_mac.o" "$OUT/obj/host/launcher.o" "$OUT/obj/host/vk_metal.o" "$OUT"/obj/spirv-cross/*.o -lc++ \
-  -framework AppKit -framework Metal -framework QuartzCore -framework CoreText -framework CoreGraphics -framework CoreFoundation \
+  -framework AppKit -framework Metal -framework QuartzCore -framework GameController -framework CoreText -framework CoreGraphics -framework CoreFoundation \
   -framework AudioToolbox -lz
 echo "$OUT/app/SimsNative"

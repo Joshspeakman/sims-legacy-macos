@@ -1,39 +1,91 @@
-// The launch window, laid out like the other ports' (Dungeon Siege, Diablo II, Delta Force): a banner (the game's logo
-// over its art), the Resolution row, and a button for each group of settings (Display, Updates) that opens it as a
-// panel. Choices are remembered in <data>/launcher.plist and passed to the game as SIMS_RESOLUTION, SIMS_WINDOWED,
-// SIMS_NOTCH and SIMS_FPS (host/sims_mac.m, host/vk_metal.mm). The art is fetched at install time (tools/sims_art.py:
-// the logo, character banner and background from the game's Steam store page) into <data>/art and a copy in the app;
-// nothing from the game is stored in this project, and without the art the window writes the title.
+// The launch window, laid out like the other ports' (Dungeon Siege, Diablo II, Delta Force): the game's logo, the Screen
+// Shape row as a card per shape, a tile for each group of settings (Display, Graphics, Controls, Updates) that opens it
+// as a panel, Saves and Game Files, Quit and Play. Choices are remembered in <data>/launcher.plist and passed to the
+// game as SIMS_RESOLUTION, SIMS_WINDOWED, SIMS_NOTCH and SIMS_FPS (host/sims_mac.m, host/vk_metal.mm).
+// Dressed as the game is: the store's screenshots and the game's own loading screen drifting and crossfading behind
+// it, plumbobs rising and turning, soft lights drifting, the Sims in a rounded blue frame with a plumbob over it, the
+// menus' blue panels and a green Play; drawn at 60 fps (the still part drawn once, again only when it changes).
+// Art (<data>/art, else Contents/Resources/art; tools/sims_art.py at install): logo.png, backdrop.jpg and shot.jpg
+// (the library banner) from the Steam store page, portrait.jpg (the library capsule), slide-<n>.jpg (the store's
+// screenshots), and setup.png, the game's own loading screen from the player's copy. Nothing from the game is stored
+// in this project; without the art the window writes the title.
+// Development: DS_LAUNCHER_SHOT=<png> renders the window (twice its size) and returns (DS_LAUNCHER_OPEN=<group> a group
+// opened, DS_LAUNCHER_FOCUS=<n> the keyboard focus on place n, DS_LAUNCHER_TIME=<s> the animation's clock,
+// DS_LAUNCHER_TIMING=1 what a frame costs, or in the window frames a second); DS_LAUNCHER_HOME=<folder> the
+// launcher's settings and art from there instead of the data folder; DS_LAUNCHER_PLAY=1 presses Play once it is up.
 #import <AppKit/AppKit.h>
+#import <GameController/GameController.h>
+#import <QuartzCore/QuartzCore.h>
 
 // ---------------------------------------------------------------- settings
+typedef struct { NSString *value, *label, *note; } Choice;
 @interface DSRow : NSObject
 @property NSString *title; @property NSArray<NSDictionary *> *choices; @property NSInteger index;
 @property (copy) void (^activate)(void);     /* a row that runs something instead of cycling (Updates) */
 @end
 @implementation DSRow @end
 
-/* The Sims' own interface: blue panels, white text, the plumbob's green for what is chosen */
-static NSColor *accent(void) { return [NSColor colorWithSRGBRed:0.55 green:0.92 blue:0.38 alpha:1]; }
-static NSColor *accent_dim(void) { return [NSColor colorWithSRGBRed:0.20 green:0.42 blue:0.85 alpha:1]; }
-static NSColor *panel_blue(void) { return [NSColor colorWithSRGBRed:0.05 green:0.12 blue:0.42 alpha:0.88]; }
-static NSColor *text_c(void) { return [NSColor colorWithSRGBRed:0.93 green:0.93 blue:0.88 alpha:1]; }
-static NSColor *dim(void) { return [NSColor colorWithSRGBRed:0.66 green:0.66 blue:0.6 alpha:1]; }
-static NSFont *din(CGFloat size)                    /* the system's rounded face, bold */
+static NSColor *rgb(double r, double g, double b, double a) { return [NSColor colorWithSRGBRed:r green:g blue:b alpha:a]; }
+static NSColor *gold(void) { return rgb(0.52, 0.92, 0.36, 1); }      /* the plumbob's green */
+static NSColor *parchment(void) { return rgb(0.97, 0.97, 1.00, 1); }
+static NSColor *dim(void) { return rgb(0.68, 0.76, 0.90, 1); }
+static NSColor *ember(double a) { return rgb(0.45, 0.90, 0.35, a); } /* the plumbob's glow */
+static NSColor *blood(double a) { return rgb(0.08, 0.20, 0.48, a); } /* the menus' blue */
+static NSFont *cp(CGFloat size, BOOL bold)                            /* the menus' rounded capitals */
 {
-    NSFont *f = [NSFont systemFontOfSize:size weight:NSFontWeightBold];
-    NSFontDescriptor *d = [f.fontDescriptor fontDescriptorWithDesign:NSFontDescriptorSystemDesignRounded];
-    return d ? [NSFont fontWithDescriptor:d size:size] : f;
+    NSFont *f = [NSFont fontWithName:bold ? @"ArialRoundedMTBold" : @"AvenirNext-Medium" size:size];
+    return f ?: [NSFont systemFontOfSize:size weight:bold ? NSFontWeightBold : NSFontWeightRegular];
 }
-static NSFont *body(CGFloat size, BOOL bold)
+static NSFont *book(CGFloat size, BOOL italic)   /* the blurb and the notes */
 {
-    NSFont *f = [NSFont systemFontOfSize:size weight:bold ? NSFontWeightSemibold : NSFontWeightRegular];
-    NSFontDescriptor *d = [f.fontDescriptor fontDescriptorWithDesign:NSFontDescriptorSystemDesignRounded];
-    return d ? [NSFont fontWithDescriptor:d size:size] : f;
+    return [NSFont fontWithName:italic ? @"AvenirNext-Italic" : @"AvenirNext-Regular" size:size] ?: [NSFont systemFontOfSize:size];
+}
+static double hash01(double x) { double s = sin(x * 12.9898) * 43758.5453; return s - floor(s); }   /* a fixed random number in 0..1 */
+
+// ---------------------------------------------------------------- pictures
+/* an image drawn to fill r (cropped to its shape), zoomed by z about a point (fx, fy in 0..1 of the picture, from the top) */
+static NSImageInterpolation fill_interp = NSImageInterpolationHigh;   /* (the moving backdrop: Medium, cheaper per frame) */
+static void draw_fill_z(NSImage *img, NSRect r, CGFloat alpha, CGFloat z, CGFloat fx, CGFloat fy)
+{
+    if (!img) return; NSSize s = img.size; if (s.width <= 0 || s.height <= 0) return;
+    CGFloat k = MAX(r.size.width / s.width, r.size.height / s.height) * z, w = r.size.width / k, h = r.size.height / k;
+    CGFloat x = (s.width - w) * fx, y = (s.height - h) * (1 - fy);                      /* (image space is bottom-up) */
+    [img drawInRect:r fromRect:NSMakeRect(x, y, w, h) operation:NSCompositingOperationSourceOver fraction:alpha respectFlipped:YES hints:@{NSImageHintInterpolation: @(fill_interp)}];
+}
+/* a picture of size points at scale pixels per point, drawn by draw() the way the window draws (top-down) */
+static NSImage *offscreen(NSSize size, CGFloat scale, void (^draw)(void))
+{
+    NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL pixelsWide:(NSInteger)ceil(size.width * scale) pixelsHigh:(NSInteger)ceil(size.height * scale)
+                                                                 bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO colorSpaceName:NSCalibratedRGBColorSpace bytesPerRow:0 bitsPerPixel:0];
+    rep = [rep bitmapImageRepByRetaggingWithColorSpace:NSColorSpace.sRGBColorSpace] ?: rep;   /* (as the window's: no conversion per frame) */
+    rep.size = size;
+    CGContextRef cg = [NSGraphicsContext graphicsContextWithBitmapImageRep:rep].CGContext;
+    [NSGraphicsContext saveGraphicsState];
+    CGContextTranslateCTM(cg, 0, size.height); CGContextScaleCTM(cg, 1, -1);
+    [NSGraphicsContext setCurrentContext:[NSGraphicsContext graphicsContextWithCGContext:cg flipped:YES]];
+    draw();
+    [NSGraphicsContext restoreGraphicsState];
+    NSImage *img = [[NSImage alloc] initWithSize:size]; [img addRepresentation:rep];
+    return img;
+}
+/* a picture made ready to draw every frame: decoded once, at most maxw pixels wide */
+static NSImage *ready(NSImage *img, CGFloat maxw)
+{
+    if (!img || img.size.width < 16) return nil;
+    NSSize s = img.size; NSInteger pw = 0, ph = 0;                     /* (its pixels: a JPEG at 300 dpi is small in points) */
+    for (NSImageRep *r in img.representations) if (r.pixelsWide > pw) { pw = r.pixelsWide; ph = r.pixelsHigh; }
+    if (pw > 0 && ph > 0) s = NSMakeSize(pw, ph);
+    CGFloat k = MIN(1.0, maxw / s.width);
+    return offscreen(NSMakeSize(round(s.width * k), round(s.height * k)), 1, ^{
+        [img drawInRect:NSMakeRect(0, 0, round(s.width * k), round(s.height * k)) fromRect:NSZeroRect operation:NSCompositingOperationCopy fraction:1 respectFlipped:YES
+                  hints:@{NSImageHintInterpolation: @(NSImageInterpolationHigh)}]; });
 }
 
 // ---------------------------------------------------------------- the view
-/* A group's button opens it as a panel over the window, with Back where Quit was; Key Guide and Updates run their own. */
+/* The window, dressed as the game is: the store's screenshots and the game's own loading screen drifting and crossfading
+ * behind it, plumbobs rising and turning, soft lights drifting out of focus, its own logo, the Sims in a rounded blue
+ * frame with a plumbob over it, the menus' blue panels and a green Play. The Screen Shape row is a card per shape; each
+ * group of settings is a tile (Display, Graphics, Controls, Saves, Updates) that opens as a panel, Back where Quit was. */
 @interface DSSection : NSObject
 @property NSString *title; @property NSArray<DSRow *> *rows;
 @property (copy) void (^activate)(void); @property (copy) NSString *(^summary)(void);
@@ -42,71 +94,101 @@ static NSFont *body(CGFloat size, BOOL bold)
 
 @interface DSLaunchView : NSView
 @property NSArray<DSRow *> *top; @property NSArray<DSSection *> *sections; @property NSInteger open;   /* the open group, -1 none */
-@property NSInteger focus; @property NSInteger hover; @property NSInteger pressed;
-@property NSImage *backdrop, *logo, *shot; @property NSString *note;
+@property NSInteger focus; @property NSInteger hover; @property NSInteger pressed; @property BOOL keyed;   /* keyed: the focus ring shows */
+@property NSImage *banner, *stone, *logo, *wood, *woodHover, *woodDown; @property NSString *note;
+@property NSArray<NSImage *> *scenes, *cards; @property NSImage *portrait; @property CGFloat portraitFx, portraitFy, portraitZ;
+@property double t; @property NSMutableDictionary *cache; @property NSInteger artGen;   /* pictures drawn once (cleared when the art changes) */
 @property (copy) void (^onPlay)(void); @property (copy) void (^onQuit)(void); @property (copy) void (^onChange)(void);
+@property (copy) void (^onSaves)(void); @property (copy) void (^onFiles)(void);
 @end
+static void plumbob(NSPoint c, CGFloat h, CGFloat turn, CGFloat alpha);
 
-enum { HIT_NONE = -1, HIT_PLAY = 100, HIT_QUIT = 101, HIT_BACK = 102, HIT_SECTION = 200 };   /* rows: 10*row + 0 (left arrow) / 1 (value) / 2 (right arrow) */
-enum { BANNER_H = 252, TOP_Y = 270 };
+/* hit codes: rows in an open group 10*row + 0 (left arrow) / 1 (value) / 2 (right arrow); the cards, the tiles */
+enum { HIT_NONE = -1, HIT_PLAY = 100, HIT_QUIT = 101, HIT_BACK = 102, HIT_SAVES = 103, HIT_FILES = 104, HIT_SECTION = 200, HIT_CARD = 300 };
+/* the keyboard's places at the top level: the cards (0), the tiles (1..), then Saves, Game Files, Quit, Play */
+enum { NBOTTOM = 4 };
 
 @implementation DSLaunchView
 - (BOOL)isFlipped { return YES; }
 - (BOOL)acceptsFirstResponder { return YES; }
 - (BOOL)acceptsFirstMouse:(NSEvent *)e { return YES; }
 - (NSArray<DSRow *> *)rows { return self.open >= 0 ? self.sections[self.open].rows : self.top; }
-- (NSInteger)items { return (NSInteger)self.rows.count + (self.open >= 0 ? 0 : (NSInteger)self.sections.count); }   /* what the keyboard moves between */
-- (NSRect)flyRect   /* an open group's panel: above Back and Play */
+- (NSInteger)firstTile { return (NSInteger)self.top.count; }
+- (NSInteger)firstBottom { return (NSInteger)self.top.count + (NSInteger)self.sections.count; }
+- (NSInteger)items { return self.open >= 0 ? (NSInteger)self.rows.count : self.firstBottom + NBOTTOM; }   /* what the keyboard moves between */
+/* ---- layout (points; the view is 980 x 660) ---- */
+- (CGFloat)scale { return self.window ? self.window.backingScaleFactor : 2; }
+- (NSRect)titleBox { return NSMakeRect(48, 26, 504, 150); }
+- (NSRect)portraitRect { return NSMakeRect(self.bounds.size.width - 48 - 300, 50, 300, 372); }
+- (NSRect)cardRect:(NSInteger)k { NSInteger n = MAX(1, (NSInteger)self.top.firstObject.choices.count); CGFloat gap = 14, w = (504 - (n - 1) * gap) / n; return NSMakeRect(48 + k * (w + gap), 300, w, 122); }
+- (NSRect)sectionRect:(NSInteger)i { NSInteger n = MAX(1, (NSInteger)self.sections.count); CGFloat gap = 12, w = (self.bounds.size.width - 96 - (n - 1) * gap) / n; return NSMakeRect(48 + i * (w + gap), 462, w, 84); }
+- (NSRect)savesRect { return NSMakeRect(48, 576, 112, 40); }
+- (NSRect)filesRect { return NSMakeRect(48 + 122, 576, 136, 40); }
+- (NSRect)playRect { CGFloat W = self.bounds.size.width; return NSMakeRect(W - 48 - 236, 566, 236, 58); }
+- (NSRect)quitRect { CGFloat W = self.bounds.size.width; return NSMakeRect(W - 48 - 236 - 14 - 176, 568, 176, 54); }
+- (NSRect)flyRect { NSRect b = self.bounds; return NSMakeRect(48, 34, b.size.width - 96, 516); }   /* an open group's panel, above Back and Play */
+- (NSRect)rowRect:(NSInteger)k { NSRect f = self.flyRect; return NSMakeRect(f.origin.x + 44, f.origin.y + 80 + 68 * k, f.size.width - 88, 60); }
+- (NSRect)arrow:(NSInteger)k right:(BOOL)right { NSRect r = [self rowRect:k]; return NSMakeRect(right ? NSMaxX(r) - 34 : NSMaxX(r) - 340, r.origin.y + 4, 30, 30); }
+- (NSRect)valueRect:(NSInteger)k { NSRect r = [self rowRect:k]; return NSMakeRect(NSMaxX(r) - 304, r.origin.y + 7, 266, 30); }
+/* the rect of a keyboard place at the top level */
+- (NSRect)placeRect:(NSInteger)f
 {
-    NSRect b = self.bounds; CGFloat h = b.size.height - 268, need = 80 + 74 * (CGFloat)(self.open >= 0 ? self.sections[self.open].rows.count : 0);
-    CGFloat grow = MIN(MAX(need - h, 0), 60);
-    return NSMakeRect(40, 168 - grow, b.size.width - 80, h + grow);
+    if (f < self.firstTile) return NSUnionRect([self cardRect:0], [self cardRect:(NSInteger)self.top.firstObject.choices.count - 1]);
+    if (f < self.firstBottom) return [self sectionRect:f - self.firstTile];
+    switch (f - self.firstBottom) { case 0: return self.savesRect; case 1: return self.filesRect; case 2: return self.quitRect; default: return self.playRect; }
 }
-- (NSRect)rowRect:(NSInteger)k { CGFloat y = self.open >= 0 ? self.flyRect.origin.y + 70 : TOP_Y + 14; return NSMakeRect(70, y + 74 * k, self.bounds.size.width - 140, 64); }
-- (NSRect)arrow:(NSInteger)k right:(BOOL)right { NSRect r = [self rowRect:k]; return NSMakeRect(right ? NSMaxX(r) - 34 : NSMaxX(r) - 330, r.origin.y + 6, 30, 30); }
-- (NSRect)valueRect:(NSInteger)k { NSRect r = [self rowRect:k]; return NSMakeRect(NSMaxX(r) - 300, r.origin.y + 7, 262, 30); }
-- (NSRect)sectionRect:(NSInteger)i
-{
-    NSInteger n = (NSInteger)self.sections.count, per = n > 4 ? 3 : 2, line = i / per, inLine = MIN(per, n - line * per), col = i % per;
-    CGFloat w = per == 3 ? 214 : 290, g = per == 3 ? 22 : 28, x0 = (self.bounds.size.width - (inLine * w + (inLine - 1) * g)) / 2;
-    return NSMakeRect(x0 + col * (w + g), TOP_Y + 74 * self.top.count + 44 + line * 100, w, 54);
-}
-- (NSRect)playRect { NSRect b = self.bounds; return NSMakeRect(NSMidX(b) + 12, b.size.height - 80, 220, 52); }
-- (NSRect)quitRect { NSRect b = self.bounds; return NSMakeRect(NSMidX(b) - 232, b.size.height - 80, 220, 52); }
 - (NSInteger)hit:(NSPoint)p
 {
     if (NSPointInRect(p, self.playRect)) return HIT_PLAY;
     if (NSPointInRect(p, self.quitRect)) return self.open >= 0 ? HIT_BACK : HIT_QUIT;
-    if (self.open < 0) for (NSInteger i = 0; i < (NSInteger)self.sections.count; i++) if (NSPointInRect(p, [self sectionRect:i])) return HIT_SECTION + i;
+    if (self.open < 0) {
+        if (NSPointInRect(p, self.savesRect)) return HIT_SAVES;
+        if (NSPointInRect(p, self.filesRect)) return HIT_FILES;
+        for (NSInteger i = 0; i < (NSInteger)self.sections.count; i++) if (NSPointInRect(p, [self sectionRect:i])) return HIT_SECTION + i;
+        for (NSInteger k = 0; k < (NSInteger)self.top.firstObject.choices.count; k++) if (NSPointInRect(p, [self cardRect:k])) return HIT_CARD + k;
+        return HIT_NONE;
+    }
     for (NSInteger k = 0; k < (NSInteger)self.rows.count; k++) {
         if (NSPointInRect(p, [self arrow:k right:NO])) return 10 * k;
         if (NSPointInRect(p, [self arrow:k right:YES])) return 10 * k + 2;
         if (NSPointInRect(p, [self valueRect:k])) return 10 * k + 1;
     }
-    if (self.open >= 0 && !NSPointInRect(p, self.flyRect)) return HIT_BACK;   /* a click outside the panel closes it */
+    if (!NSPointInRect(p, self.flyRect)) return HIT_BACK;            /* a click outside the panel closes it */
     return HIT_NONE;
 }
 - (void)openSection:(NSInteger)i
 {
-    DSSection *s = self.sections[i]; self.focus = (NSInteger)self.top.count + i;
+    DSSection *s = self.sections[i]; self.focus = self.firstTile + i;
     if (s.activate) { s.activate(); self.needsDisplay = YES; return; }
     self.open = i; self.focus = 0; self.hover = HIT_NONE; self.needsDisplay = YES;
 }
-- (void)closeSection { if (self.open < 0) return; self.focus = (NSInteger)self.top.count + self.open; self.open = -1; self.hover = HIT_NONE; self.needsDisplay = YES; }
+- (void)closeSection { if (self.open < 0) return; self.focus = self.firstTile + self.open; self.open = -1; self.hover = HIT_NONE; self.needsDisplay = YES; }
+- (void)chooseCard:(NSInteger)k
+{
+    DSRow *r = self.top.firstObject; if (!r || k == r.index) return;
+    r.index = k; self.needsDisplay = YES; if (self.onChange) self.onChange();
+}
 - (void)updateTrackingAreas
 {
     for (NSTrackingArea *t in self.trackingAreas) [self removeTrackingArea:t];
     [self addTrackingArea:[[NSTrackingArea alloc] initWithRect:self.bounds options:NSTrackingMouseMoved | NSTrackingActiveAlways | NSTrackingInVisibleRect owner:self userInfo:nil]];
 }
 - (void)mouseMoved:(NSEvent *)e { NSInteger h = [self hit:[self convertPoint:e.locationInWindow fromView:nil]]; if (h != self.hover) { self.hover = h; self.needsDisplay = YES; } }
-- (void)mouseDown:(NSEvent *)e { self.pressed = [self hit:[self convertPoint:e.locationInWindow fromView:nil]]; self.needsDisplay = YES; }
+- (void)mouseDown:(NSEvent *)e { self.pressed = [self hit:[self convertPoint:e.locationInWindow fromView:nil]]; self.keyed = NO; self.needsDisplay = YES; }
 - (void)mouseUp:(NSEvent *)e
 {
     NSInteger h = [self hit:[self convertPoint:e.locationInWindow fromView:nil]], p = self.pressed; self.pressed = HIT_NONE; self.needsDisplay = YES;
     if (h != p || h == HIT_NONE) return;
+    [self press:h];
+}
+- (void)press:(NSInteger)h
+{
     if (h == HIT_PLAY) { if (self.onPlay) self.onPlay(); return; }
     if (h == HIT_QUIT) { if (self.onQuit) self.onQuit(); return; }
     if (h == HIT_BACK) { [self closeSection]; return; }
+    if (h == HIT_SAVES) { if (self.onSaves) self.onSaves(); return; }
+    if (h == HIT_FILES) { if (self.onFiles) self.onFiles(); return; }
+    if (h >= HIT_CARD) { self.focus = 0; [self chooseCard:h - HIT_CARD]; return; }
     if (h >= HIT_SECTION) { [self openSection:h - HIT_SECTION]; return; }
     NSInteger k = h / 10; self.focus = k;
     if (self.rows[k].activate) { self.rows[k].activate(); self.needsDisplay = YES; return; }
@@ -114,157 +196,451 @@ enum { BANNER_H = 252, TOP_Y = 270 };
 }
 - (void)step:(NSInteger)k by:(NSInteger)dir
 {
-    if (k >= (NSInteger)self.rows.count) { NSInteger n = [self items]; self.focus = (self.focus + dir + n) % n; self.needsDisplay = YES; return; }   /* the group buttons */
     DSRow *r = self.rows[k]; NSInteger n = (NSInteger)r.choices.count;
     if (r.activate) { r.activate(); self.needsDisplay = YES; return; }
     r.index = (r.index + dir + n) % n; self.needsDisplay = YES;
     if (self.onChange) self.onChange();
 }
+/* one step from the keyboard or a controller. An open group: up and down move between its rows, left and right change
+ * the row. The top level: the cards (left and right choose), the tiles and the buttons along their rows (round), up and
+ * down to the nearest of the next row. Return: the cards play, a tile opens, a button presses. */
+enum { NAV_LEFT = 1, NAV_RIGHT, NAV_UP, NAV_DOWN, NAV_OK, NAV_BACK, NAV_PLAY };
+- (void)nav:(int)n
+{
+    self.keyed = YES; self.needsDisplay = YES;
+    if (n == NAV_PLAY) { if (self.onPlay) self.onPlay(); return; }
+    if (self.open >= 0) {
+        NSInteger rc = (NSInteger)self.rows.count;
+        switch (n) {
+        case NAV_BACK: [self closeSection]; return;
+        case NAV_UP: self.focus = (self.focus + rc - 1) % rc; return;
+        case NAV_DOWN: self.focus = (self.focus + 1) % rc; return;
+        case NAV_LEFT: case NAV_RIGHT: [self step:self.focus by:n == NAV_LEFT ? -1 : 1]; return;
+        case NAV_OK: if (self.rows[self.focus].activate) { self.rows[self.focus].activate(); return; } [self closeSection]; return;
+        }
+        return;
+    }
+    NSInteger f = self.focus, t0 = self.firstTile, b0 = self.firstBottom, end = b0 + NBOTTOM;
+    int row = f < t0 ? 0 : f < b0 ? 1 : 2;
+    switch (n) {
+    case NAV_BACK: if (self.onQuit) self.onQuit(); return;
+    case NAV_OK:
+        if (row == 0) { if (self.onPlay) self.onPlay(); return; }
+        if (row == 1) { [self openSection:f - t0]; return; }
+        { static const NSInteger codes[NBOTTOM] = {HIT_SAVES, HIT_FILES, HIT_QUIT, HIT_PLAY}; [self press:codes[f - b0]]; } return;
+    case NAV_LEFT: case NAV_RIGHT: {
+        NSInteger d = n == NAV_LEFT ? -1 : 1;
+        if (row == 0) { DSRow *r = self.top.firstObject; NSInteger c = (NSInteger)r.choices.count; [self chooseCard:(r.index + d + c) % c]; return; }
+        NSInteger lo = row == 1 ? t0 : b0, hi = row == 1 ? b0 : end;
+        self.focus = lo + (f - lo + d + (hi - lo)) % (hi - lo); return; }
+    case NAV_UP: case NAV_DOWN: {
+        int to = row + (n == NAV_DOWN ? 1 : -1); if (to < 0 || to > 2) return;
+        NSInteger lo = to == 0 ? 0 : to == 1 ? t0 : b0, hi = to == 0 ? t0 : to == 1 ? b0 : end, best = lo; CGFloat x = NSMidX([self placeRect:f]), bd = 1e9;
+        for (NSInteger i = lo; i < hi; i++) { CGFloat dd = fabs(NSMidX([self placeRect:i]) - x); if (dd < bd) { bd = dd; best = i; } }
+        self.focus = best; return; }
+    }
+}
 - (void)keyDown:(NSEvent *)e
 {
-    NSInteger n = [self items], rc = (NSInteger)self.rows.count;
     switch (e.keyCode) {
-    case 0x24: case 0x4c:                                                /* Return, Enter */
-        if (self.focus >= rc) { [self openSection:self.focus - rc]; return; }
-        if (self.rows[self.focus].activate) { self.rows[self.focus].activate(); self.needsDisplay = YES; return; }
-        if (self.open >= 0) { [self closeSection]; return; }
-        if (self.onPlay) self.onPlay(); return;
-    case 0x35: if (self.open >= 0) { [self closeSection]; return; }      /* Escape */
-               if (self.onQuit) self.onQuit(); return;
-    case 0x7e: self.focus = (self.focus + n - 1) % n; self.needsDisplay = YES; return;
-    case 0x7d: self.focus = (self.focus + 1) % n; self.needsDisplay = YES; return;
-    case 0x7b: [self step:self.focus by:-1]; return;
-    case 0x7c: [self step:self.focus by:1]; return;
+    case 0x24: case 0x4c: case 0x31: [self nav:NAV_OK]; return;       /* Return, Enter, Space */
+    case 0x35: [self nav:NAV_BACK]; return;                            /* Escape */
+    case 0x7e: [self nav:NAV_UP]; return;
+    case 0x7d: [self nav:NAV_DOWN]; return;
+    case 0x7b: [self nav:NAV_LEFT]; return;
+    case 0x7c: [self nav:NAV_RIGHT]; return;
+    case 0x23: [self nav:NAV_PLAY]; return;                            /* P */
     }
     [super keyDown:e];
 }
-static void draw_text(NSString *s, NSFont *f, NSColor *c, NSRect r, NSTextAlignment al, NSShadow *sh, CGFloat kern)
+static void draw_text(NSString *s, NSFont *f, NSColor *c, NSRect r, NSTextAlignment al, NSShadow *sh)
 {
     NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new]; ps.alignment = al; ps.lineBreakMode = NSLineBreakByTruncatingTail;
-    NSMutableDictionary *a = [@{NSFontAttributeName: f, NSForegroundColorAttributeName: c, NSParagraphStyleAttributeName: ps, NSKernAttributeName: @(kern)} mutableCopy];
+    NSMutableDictionary *a = [@{NSFontAttributeName: f, NSForegroundColorAttributeName: c, NSParagraphStyleAttributeName: ps} mutableCopy];
     if (sh) a[NSShadowAttributeName] = sh;
     [s drawInRect:r withAttributes:a];
 }
-/* (the other ports frame panels with corner marks; The Sims' are plain rounded rectangles) */
-static void brackets(NSRect r, CGFloat len, CGFloat w, NSColor *c) { (void)r; (void)len; (void)w; (void)c; }
-static void fill_over(NSRect r) { NSRectFillUsingOperation(r, NSCompositingOperationSourceOver); }
+static CGFloat ktext(NSString *s, NSFont *f, NSColor *c, CGFloat kern, NSPoint at, NSTextAlignment al)   /* kerned, one line; its width */
+{
+    NSAttributedString *a = [[NSAttributedString alloc] initWithString:s attributes:@{NSFontAttributeName: f, NSForegroundColorAttributeName: c, NSKernAttributeName: @(kern)}];
+    CGFloat w = a.size.width - kern;
+    [a drawAtPoint:NSMakePoint(al == NSTextAlignmentCenter ? at.x - w / 2 : al == NSTextAlignmentRight ? at.x - w : at.x, at.y)];
+    return w;
+}
+static void corner(NSPoint c, CGFloat sx, CGFloat sy, CGFloat len, NSColor *col);
+static NSShadow *drop(CGFloat blur, CGFloat a) { NSShadow *sh = [NSShadow new]; sh.shadowColor = [NSColor colorWithWhite:0 alpha:a]; sh.shadowOffset = NSMakeSize(0, -1.5); sh.shadowBlurRadius = blur; return sh; }
+- (void)drawTitle:(NSRect)r
+{
+    /* the name when the logo isn't there: white letters, a blue rim, a drop shadow */
+    NSString *t = @"THE SIMS"; NSFont *f = cp(58, YES);
+    NSDictionary *at = @{NSFontAttributeName: f, NSKernAttributeName: @3};
+    NSSize sz = [t sizeWithAttributes:at]; NSPoint o = NSMakePoint(NSMidX(r) - sz.width / 2, NSMidY(r) - sz.height / 2 - 2);
+    NSShadow *sh = [NSShadow new]; sh.shadowColor = [NSColor colorWithWhite:0 alpha:0.85]; sh.shadowOffset = NSMakeSize(0, -3); sh.shadowBlurRadius = 5;
+    NSMutableDictionary *rim = [at mutableCopy]; rim[NSStrokeColorAttributeName] = rgb(0.80, 0.12, 0.14, 1); rim[NSStrokeWidthAttributeName] = @(9); rim[NSShadowAttributeName] = sh;
+    rim[NSForegroundColorAttributeName] = rgb(0.80, 0.12, 0.14, 1);
+    [t drawAtPoint:o withAttributes:rim];
+    /* silver fill: the glyphs as a clip, a vertical gradient through it */
+    NSImage *mask = [NSImage imageWithSize:sz flipped:NO drawingHandler:^BOOL(NSRect dst) {
+        NSMutableDictionary *m = [at mutableCopy]; m[NSForegroundColorAttributeName] = NSColor.whiteColor; [t drawAtPoint:NSZeroPoint withAttributes:m];
+        NSGradient *g = [[NSGradient alloc] initWithColorsAndLocations:[NSColor colorWithWhite:0.98 alpha:1], 0.0, [NSColor colorWithWhite:0.72 alpha:1], 0.45,
+                         [NSColor colorWithWhite:0.42 alpha:1], 0.5, [NSColor colorWithWhite:0.86 alpha:1], 0.8, [NSColor colorWithWhite:0.6 alpha:1], 1.0, nil];
+        [[NSGraphicsContext currentContext] setCompositingOperation:NSCompositingOperationSourceIn];
+        [g drawInRect:dst angle:90];
+        return YES;
+    }];
+    [mask drawInRect:NSMakeRect(o.x, o.y, sz.width, sz.height) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil];
+}
+/* a button of the game's menus: a rounded blue lozenge with a light rim (Play: green), lighter when pointed at */
 - (void)drawButton:(NSRect)r title:(NSString *)title code:(NSInteger)code primary:(BOOL)primary
 {
-    BOOL hot = self.hover == code, down = self.pressed == code;
-    NSColor *fill = down ? [accent() colorWithAlphaComponent:0.55] : hot ? [accent_dim() colorWithAlphaComponent:0.95] : primary ? [NSColor colorWithSRGBRed:0.22 green:0.62 blue:0.22 alpha:0.95] : panel_blue();
-    [fill setFill]; [[NSBezierPath bezierPathWithRoundedRect:r xRadius:r.size.height / 2 yRadius:r.size.height / 2] fill];
-    [[NSColor colorWithWhite:1 alpha:primary || hot ? 0.95 : 0.6] setStroke]; NSBezierPath *b = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(r, 1, 1) xRadius:r.size.height / 2 - 1 yRadius:r.size.height / 2 - 1]; b.lineWidth = 2; [b stroke];
-    brackets(NSInsetRect(r, -4, -4), 10, 2, primary || hot ? accent() : accent_dim());
+    BOOL foc = self.keyed && self.open < 0 && [self placeRect:self.focus].origin.x == r.origin.x && [self placeRect:self.focus].origin.y == r.origin.y;
+    NSImage *img = self.pressed == code ? (self.woodDown ?: self.wood) : self.hover == code || foc ? (self.woodHover ?: self.wood) : self.wood;
+    if (img) [img drawInRect:r fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:@{NSImageHintInterpolation: @(NSImageInterpolationHigh)}];
+    else {
+        CGFloat lift = self.pressed == code ? -0.04 : self.hover == code || foc ? 0.06 : 0;
+        NSBezierPath *p = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(r, 1, 1) xRadius:r.size.height / 2 - 1 yRadius:r.size.height / 2 - 1];
+        NSGradient *g = primary ? [[NSGradient alloc] initWithColorsAndLocations:rgb(0.50 + lift, 0.88 + lift, 0.38 + lift, 1), 0.0, rgb(0.22, 0.62, 0.18, 1), 0.6, rgb(0.12, 0.42, 0.10, 1), 1.0, nil]
+                                : [[NSGradient alloc] initWithColorsAndLocations:rgb(0.30 + lift, 0.48 + lift, 0.85 + lift, 1), 0.0, rgb(0.14, 0.28, 0.62, 1), 0.6, rgb(0.08, 0.18, 0.44, 1), 1.0, nil];
+        [g drawInBezierPath:p angle:self.pressed == code ? 90 : -90];
+        [rgb(1, 1, 1, 0.45) setStroke]; p.lineWidth = 1.5; [p stroke];
+        [(foc ? NSColor.whiteColor : rgb(0.02, 0.06, 0.18, 0.9)) setStroke]; NSBezierPath *o = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(r, -0.5, -0.5) xRadius:r.size.height / 2 yRadius:r.size.height / 2]; o.lineWidth = foc ? 2 : 1; [o stroke];
+    }
     NSShadow *sh = [NSShadow new]; sh.shadowColor = [NSColor colorWithWhite:0 alpha:0.9]; sh.shadowOffset = NSMakeSize(0, -1.5); sh.shadowBlurRadius = 2;
-    NSFont *f = din(primary ? 30 : 26); NSDictionary *at = @{NSFontAttributeName: f, NSForegroundColorAttributeName: hot || primary ? NSColor.whiteColor : text_c(), NSShadowAttributeName: sh, NSKernAttributeName: @4};
-    NSSize sz = [title sizeWithAttributes:at];   /* the capitals centred on the button */
+    NSColor *c = NSColor.whiteColor;
+    /* the capitals centred on the button (the line's own box sits them high: it leaves room below for descenders) */
+    NSFont *f = cp(primary ? 25 : 20, YES); NSDictionary *at = @{NSFontAttributeName: f, NSForegroundColorAttributeName: c, NSShadowAttributeName: sh, NSKernAttributeName: @(primary ? 3 : 2)};
+    NSSize sz = [title sizeWithAttributes:at];
     [title drawAtPoint:NSMakePoint(NSMidX(r) - sz.width / 2, round(NSMidY(r) + f.capHeight / 2 - f.ascender)) withAttributes:at];
 }
 - (void)drawArrow:(NSRect)r right:(BOOL)right lit:(BOOL)lit
 {
-    NSBezierPath *p = [NSBezierPath bezierPath]; CGFloat x0 = r.origin.x + 9, x1 = NSMaxX(r) - 9, y0 = r.origin.y + 7, y1 = NSMaxY(r) - 7, ym = NSMidY(r);
+    NSBezierPath *p = [NSBezierPath bezierPath]; CGFloat x0 = r.origin.x + 7, x1 = NSMaxX(r) - 7, y0 = r.origin.y + 6, y1 = NSMaxY(r) - 6, ym = NSMidY(r);
     if (right) { [p moveToPoint:NSMakePoint(x0, y0)]; [p lineToPoint:NSMakePoint(x1, ym)]; [p lineToPoint:NSMakePoint(x0, y1)]; }
     else { [p moveToPoint:NSMakePoint(x1, y0)]; [p lineToPoint:NSMakePoint(x0, ym)]; [p lineToPoint:NSMakePoint(x1, y1)]; }
-    [p closePath]; [(lit ? NSColor.whiteColor : accent()) setFill]; [p fill];
+    [p closePath];
+    NSGradient *g = [[NSGradient alloc] initWithStartingColor:[NSColor colorWithWhite:lit ? 1.0 : 0.88 alpha:1] endingColor:[NSColor colorWithWhite:lit ? 0.7 : 0.45 alpha:1]];
+    [g drawInBezierPath:p angle:90];
+    [rgb(0.08, 0.18, 0.44, 1) setStroke]; p.lineWidth = 1.5; [p stroke];
 }
-- (void)drawRows:(NSShadow *)sh
+static void rivet(CGFloat x, CGFloat y, CGFloat s)
 {
-    for (NSInteger k = 0; k < (NSInteger)self.rows.count; k++) {
-        DSRow *row = self.rows[k]; NSRect r = [self rowRect:k]; NSDictionary *ch = row.choices[row.index];
-        if (k == self.focus) { [[NSColor colorWithWhite:1 alpha:0.08] setFill]; [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(r, -10, -2) xRadius:10 yRadius:10] fill]; }
-        draw_text(row.title, din(22), NSColor.whiteColor, NSMakeRect(r.origin.x + 4, r.origin.y + 10, 300, 30), NSTextAlignmentLeft, sh, 2);
-        [self drawArrow:[self arrow:k right:NO] right:NO lit:self.hover == 10 * k];
-        [self drawArrow:[self arrow:k right:YES] right:YES lit:self.hover == 10 * k + 2];
-        draw_text(ch[@"label"], body(20, YES), self.hover == 10 * k + 1 ? NSColor.whiteColor : text_c(), [self valueRect:k], NSTextAlignmentCenter, sh, 0.5);
-        draw_text(ch[@"note"] ?: @"", body(12.5, NO), dim(), NSMakeRect(NSMaxX(r) - 340, r.origin.y + 40, 350, 18), NSTextAlignmentCenter, nil, 0);
-        if (k + 1 < (NSInteger)self.rows.count) { [[accent_dim() colorWithAlphaComponent:0.35] setFill]; fill_over(NSMakeRect(r.origin.x, NSMaxY(r) + 5, r.size.width, 1)); }
+    NSRect d = NSMakeRect(x - s, y - s, 2 * s, 2 * s);
+    NSGradient *g = [[NSGradient alloc] initWithColorsAndLocations:rgb(0.98, 0.86, 0.55, 1), 0.0, rgb(0.62, 0.42, 0.16, 1), 0.6, rgb(0.25, 0.15, 0.05, 1), 1.0, nil];
+    [g drawInBezierPath:[NSBezierPath bezierPathWithOvalInRect:d] relativeCenterPosition:NSMakePoint(-0.35, 0.35)];
+}
+/* a riveted iron band around a plaque, like the frames of the game's menus */
+- (void)drawIronFrame:(NSRect)r
+{
+    NSBezierPath *outer = [NSBezierPath bezierPathWithRect:NSInsetRect(r, 3, 3)];
+    outer.lineWidth = 7; [[NSColor colorWithWhite:0.08 alpha:1] setStroke]; [outer stroke];
+    outer.lineWidth = 5; [rgb(0.45, 0.46, 0.47, 1) setStroke]; [outer stroke];
+    NSBezierPath *hi = [NSBezierPath bezierPathWithRect:NSInsetRect(r, 1.5, 1.5)]; hi.lineWidth = 1; [[NSColor colorWithWhite:0.78 alpha:0.8] setStroke]; [hi stroke];
+    NSBezierPath *lo = [NSBezierPath bezierPathWithRect:NSInsetRect(r, 6, 6)]; lo.lineWidth = 1.2; [[NSColor colorWithWhite:0.05 alpha:0.9] setStroke]; [lo stroke];
+    for (CGFloat x = r.origin.x + 14; x <= NSMaxX(r) - 13; x += (r.size.width - 28) / 8) { rivet(x, r.origin.y + 3.5, 4); rivet(x, NSMaxY(r) - 3.5, 4); }
+    for (CGFloat y = r.origin.y + 14 + (r.size.height - 28) / 6; y < NSMaxY(r) - 20; y += (r.size.height - 28) / 6) { rivet(r.origin.x + 3.5, y, 4); rivet(NSMaxX(r) - 3.5, y, 4); }
+}
+/* a gilded corner: an L of brass with a stud, as the game's inventory and dialogue frames have */
+static void corner(NSPoint c, CGFloat sx, CGFloat sy, CGFloat len, NSColor *col)
+{
+    NSBezierPath *p = [NSBezierPath bezierPath]; p.lineWidth = 2; p.lineCapStyle = NSLineCapStyleSquare;
+    [p moveToPoint:NSMakePoint(c.x, c.y + sy * len)]; [p lineToPoint:c]; [p lineToPoint:NSMakePoint(c.x + sx * len, c.y)];
+    [col setStroke]; [p stroke];
+    NSBezierPath *d = [NSBezierPath bezierPath]; CGFloat s = 3.6, x = c.x + sx * 6, y = c.y + sy * 6;
+    [d moveToPoint:NSMakePoint(x, y - s)]; [d lineToPoint:NSMakePoint(x + s, y)]; [d lineToPoint:NSMakePoint(x, y + s)]; [d lineToPoint:NSMakePoint(x - s, y)]; [d closePath];
+    [col setFill]; [d fill];
+}
+/* a panel of the game's menus: rounded, a translucent blue, a light rim */
+- (void)plate:(NSRect)r lit:(CGFloat)lit edge:(NSColor *)edge
+{
+    NSBezierPath *rr = [NSBezierPath bezierPathWithRoundedRect:r xRadius:10 yRadius:10];
+    NSGradient *g = [[NSGradient alloc] initWithColorsAndLocations:rgb(0.12, 0.24, 0.55, 0.86), 0.0, rgb(0.05, 0.11, 0.30, 0.90), 1.0, nil];
+    [g drawInBezierPath:rr angle:-90];
+    [rgb(1, 1, 1, 0.30) setStroke]; NSBezierPath *rim = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(r, 1.5, 1.5) xRadius:9 yRadius:9]; rim.lineWidth = 1; [rim stroke];
+    if (lit > 0) { [ember(0.16 * lit) setFill]; [rr fill]; }
+    [(edge ?: rgb(0.02, 0.06, 0.18, 0.9)) setStroke]; rr.lineWidth = edge ? 2 : 1; [rr stroke];
+    return;
+    if (lit > 0) {
+        NSGradient *w = [[NSGradient alloc] initWithColorsAndLocations:ember(0.30 * lit), 0.0, blood(0.08 * lit), 1.0, nil];
+        [w drawInRect:r angle:-90];
     }
+    [(edge ?: [gold() colorWithAlphaComponent:0.38]) setStroke];
+    NSBezierPath *p = [NSBezierPath bezierPathWithRect:NSInsetRect(r, 0.5, 0.5)]; p.lineWidth = edge ? 1.5 : 1; [p stroke];
+    [[gold() colorWithAlphaComponent:0.12] setStroke];
+    NSBezierPath *q = [NSBezierPath bezierPathWithRect:NSInsetRect(r, 4.5, 4.5)]; q.lineWidth = 1; [q stroke];
+    NSColor *cc = edge ?: [gold() colorWithAlphaComponent:0.75];
+    for (int k = 0; k < 4; k++) corner(NSMakePoint(k % 2 ? NSMaxX(r) - 2 : r.origin.x + 2, k / 2 ? NSMaxY(r) - 2 : r.origin.y + 2), k % 2 ? -1 : 1, k / 2 ? -1 : 1, 12, cc);
 }
-- (void)drawPanel:(NSRect)panel
+/* a thin brass rule with a diamond in the middle */
+static void rule(CGFloat x0, CGFloat x1, CGFloat y, CGFloat alpha)
 {
-    [panel_blue() setFill]; [[NSBezierPath bezierPathWithRoundedRect:panel xRadius:14 yRadius:14] fill];
-    [[NSColor colorWithWhite:1 alpha:0.5] setStroke]; NSBezierPath *bp = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(panel, 1, 1) xRadius:13 yRadius:13]; bp.lineWidth = 2; [bp stroke];
-    brackets(NSInsetRect(panel, -5, -5), 18, 2.5, accent());
+    CGFloat m = (x0 + x1) / 2;
+    [[[NSGradient alloc] initWithColors:@[rgb(0.62, 0.78, 1.0, 0), rgb(0.62, 0.78, 1.0, alpha)]] drawInRect:NSMakeRect(x0, y - 0.5, m - 9 - x0, 1) angle:0];
+    [[[NSGradient alloc] initWithColors:@[rgb(0.62, 0.78, 1.0, alpha), rgb(0.62, 0.78, 1.0, 0)]] drawInRect:NSMakeRect(m + 9, y - 0.5, x1 - m - 9, 1) angle:0];
+    NSBezierPath *d = [NSBezierPath bezierPath];
+    [d moveToPoint:NSMakePoint(m, y - 4.5)]; [d lineToPoint:NSMakePoint(m + 4.5, y)]; [d lineToPoint:NSMakePoint(m, y + 4.5)]; [d lineToPoint:NSMakePoint(m - 4.5, y)]; [d closePath];
+    [rgb(0.52, 0.92, 0.36, alpha) setFill]; [d fill];
 }
-/* an image filling a rectangle, its aspect kept (cropped), at the given share of its own centre */
-static void draw_cover(NSImage *img, NSRect r, CGFloat fraction)
+/* ---- the moving part ---- */
+/* the backdrop: the slides, each drifting from when it starts fading in until it has faded out (no jump at a handover);
+ * a wide one (the key art) pans across */
+- (void)backdrop
 {
-    NSSize is = img.size; CGFloat sc = MAX(r.size.width / is.width, r.size.height / is.height), w = r.size.width / sc, h = r.size.height / sc;
-    [img drawInRect:r fromRect:NSMakeRect((is.width - w) / 2, (is.height - h) / 2, w, h) operation:NSCompositingOperationSourceOver fraction:fraction
-     respectFlipped:YES hints:@{NSImageHintInterpolation: @(NSImageInterpolationHigh)}];
+    NSArray<NSImage *> *sc = self.scenes; NSUInteger n = sc.count; NSRect b = self.bounds; double tt = MAX(0.0, self.t);
+    if (!n) return;
+    double per = 8.5, fadeT = 1.8;
+    void (^slide)(NSUInteger, double, CGFloat) = ^(NSUInteger j, double local, CGFloat a) {
+        NSImage *im = sc[j % n]; double p = local / (per + fadeT), aspect = im.size.width / MAX(1.0, im.size.height);
+        CGFloat dir = (j % 2) ? 1 : -1, amp = aspect > 2.2 ? 0.40 : 0.10;
+        draw_fill_z(im, b, a, (CGFloat)(1.04 + 0.07 * p), (CGFloat)(0.5 + dir * amp * (p - 0.5)), (CGFloat)(0.45 + 0.05 * (p - 0.5)));
+    };
+    if (n == 1) { draw_fill_z(sc[0], b, 1, (CGFloat)(1.08 + 0.035 * sin(tt * 0.11)), (CGFloat)(0.5 + 0.06 * sin(tt * 0.07)), 0.45); return; }
+    NSUInteger k = (NSUInteger)(tt / per); double local = tt - (double)k * per;
+    if (local < fadeT && k > 0) { slide(k - 1, local + per, 1); slide(k, local, (CGFloat)(local / fadeT)); }
+    else slide(k, local, 1);
 }
-- (void)drawBanner:(NSRect)br shadow:(NSShadow *)sh
+/* a soft round glow (mist, the fire, a spark's halo), drawn once small: it is drawn scaled up, and blurry is right */
+- (NSImage *)sprite:(NSString *)key colors:(NSArray<NSColor *> *)cols
 {
-    [NSColor.blackColor setFill]; NSRectFill(br);
-    if (self.backdrop) draw_cover(self.backdrop, br, 1);
-    if (self.shot) {   /* the screenshot on the right, fading into the background towards the logo */
-        NSRect sr = NSMakeRect(br.size.width * 0.38, 0, br.size.width * 0.62, br.size.height);
-        NSImage *layer = [NSImage imageWithSize:sr.size flipped:YES drawingHandler:^BOOL(NSRect dst) {
-            draw_cover(self.shot, dst, 1);
-            NSGradient *fade = [[NSGradient alloc] initWithColorsAndLocations:[NSColor colorWithWhite:0 alpha:1], 0.0, [NSColor colorWithWhite:0 alpha:0.6], 0.25, [NSColor colorWithWhite:0 alpha:0], 0.55, nil];
-            [[NSGraphicsContext currentContext] setCompositingOperation:NSCompositingOperationDestinationOut];
-            [fade drawInRect:dst angle:0];
-            return YES;
-        }];
-        [layer drawInRect:sr fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil];
+    NSImage *c = self.cache[key]; if (c) return c;
+    c = offscreen(NSMakeSize(128, 128), 1, ^{
+        [[[NSGradient alloc] initWithColors:cols] drawFromCenter:NSMakePoint(64, 64) radius:0 toCenter:NSMakePoint(64, 64) radius:64 options:0]; });
+    self.cache[key] = c; return c;
+}
+static void draw_sprite(NSImage *img, NSPoint c, CGFloat rx, CGFloat ry, CGFloat alpha)
+{
+    if (alpha <= 0.002) return;
+    [img drawInRect:NSMakeRect(c.x - rx, c.y - ry, 2 * rx, 2 * ry) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:MIN(1, alpha) respectFlipped:YES hints:@{NSImageHintInterpolation: @(NSImageInterpolationLow)}];
+}
+/* the window's grade, drawn once: a red wash, dark on the left for the title, dark under the tiles, round the edges */
+- (NSImage *)grade
+{
+    NSImage *c = self.cache[@"grade"]; if (c) return c;
+    NSRect b = self.bounds;
+    c = offscreen(b.size, 1, ^{
+        [rgb(0.10, 0.22, 0.50, 0.14) setFill]; NSRectFillUsingOperation(b, NSCompositingOperationSourceOver);
+        NSGradient *side = [[NSGradient alloc] initWithColorsAndLocations:rgb(0.02, 0.05, 0.14, 0.74), 0.0, rgb(0.02, 0.05, 0.14, 0.40), 0.45, rgb(0.02, 0.05, 0.14, 0.06), 0.78, rgb(0.02, 0.05, 0.14, 0.02), 1.0, nil];
+        [side drawInRect:b angle:0];
+        NSGradient *low = [[NSGradient alloc] initWithColorsAndLocations:rgb(0, 0, 0, 0.18), 0.0, rgb(0, 0, 0, 0.0), 0.36, rgb(0.02, 0.05, 0.14, 0.42), 0.64, rgb(0.02, 0.05, 0.14, 0.90), 0.84, rgb(0.02, 0.05, 0.14, 0.96), 1.0, nil];
+        [low drawInRect:b angle:-90];
+        NSGradient *vig = [[NSGradient alloc] initWithStartingColor:rgb(0, 0, 0, 0) endingColor:rgb(0, 0, 0, 0.5)];
+        [vig drawInRect:b relativeCenterPosition:NSMakePoint(0.15, 0.1)];
+    });
+    self.cache[@"grade"] = c; return c;
+}
+/* the title, its fire behind it, drawn once: the game's own logo, else its name in silver and copper */
+- (NSImage *)title
+{
+    NSImage *c = self.cache[@"title"]; if (c) return c;
+    NSRect box = self.titleBox, out = NSInsetRect(box, -40, -40);
+    c = offscreen(out.size, self.scale, ^{
+        NSRect bx = NSOffsetRect(box, -out.origin.x, -out.origin.y);
+        if (self.logo) {
+            NSSize s = self.logo.size; CGFloat w = bx.size.width, h = w * s.height / s.width; if (h > bx.size.height) { h = bx.size.height; w = h * s.width / s.height; }
+            NSShadow *sh = [NSShadow new]; sh.shadowColor = rgb(0, 0, 0, 0.9); sh.shadowBlurRadius = 8; sh.shadowOffset = NSMakeSize(0, -3); [sh set];
+            [self.logo drawInRect:NSMakeRect(NSMidX(bx) - w / 2, NSMidY(bx) - h / 2, w, h) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:@{NSImageHintInterpolation: @(NSImageInterpolationHigh)}];
+        } else [self drawTitle:bx];
+    });
+    self.cache[@"title"] = c; return c;
+}
+/* the portrait in its frame (the frame drawn once, in the still part) */
+- (void)drawPortrait:(NSRect)in
+{
+    [NSGraphicsContext saveGraphicsState]; NSRectClip(in);
+    [rgb(0.03, 0.07, 0.18, 1) setFill]; NSRectFill(in);
+    if (self.portrait) draw_fill_z(self.portrait, in, 1, (CGFloat)(self.portraitZ + 0.02 * sin(self.t * 0.21)), (CGFloat)(self.portraitFx + 0.01 * sin(self.t * 0.13)), self.portraitFy);
+    else if (self.logo) {                                              /* no picture: the logo, in the fire */
+        draw_sprite([self sprite:@"fire" colors:@[ember(1), blood(0.5), rgb(0, 0, 0, 0)]], NSMakePoint(NSMidX(in), NSMidY(in)), 200, 200, 0.5);
+        NSSize s = self.logo.size; CGFloat w = in.size.width - 30, h = w * s.height / s.width;
+        [self.logo drawInRect:NSMakeRect(NSMidX(in) - w / 2, NSMidY(in) - h / 2 - 20, w, h) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil];
     }
-    NSGradient *shade = [[NSGradient alloc] initWithColorsAndLocations:[NSColor colorWithWhite:0 alpha:0.45], 0.0, [NSColor colorWithWhite:0 alpha:0.05], 0.5, [NSColor colorWithWhite:0 alpha:0.15], 1.0, nil];
-    [shade drawInRect:br angle:0];
-    /* the logo on the left, the subtitle under it */
-    NSRect lr = NSMakeRect(28, 16, 300, 186);
-    if (self.logo) {
-        CGFloat h = lr.size.height, w = h * self.logo.size.width / self.logo.size.height; if (w > lr.size.width) { w = lr.size.width; h = w * self.logo.size.height / self.logo.size.width; }
-        NSShadow *glow = [NSShadow new]; glow.shadowColor = [NSColor colorWithWhite:0 alpha:0.9]; glow.shadowOffset = NSZeroSize; glow.shadowBlurRadius = 14;
-        [NSGraphicsContext saveGraphicsState]; [glow set];
-        [self.logo drawInRect:NSMakeRect(NSMidX(lr) - w / 2, lr.origin.y + (lr.size.height - h) / 2, w, h) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:@{NSImageHintInterpolation: @(NSImageInterpolationHigh)}];
-        [NSGraphicsContext restoreGraphicsState];
-    }
-    else draw_text(@"THE SIMS", din(54), NSColor.whiteColor, NSMakeRect(lr.origin.x - 20, 70, lr.size.width + 40, 64), NSTextAlignmentCenter, sh, 6);
-    draw_text(@"NATIVE EDITION FOR macOS", din(15), NSColor.whiteColor, NSMakeRect(lr.origin.x - 20, NSMaxY(lr) + 8, lr.size.width + 40, 22), NSTextAlignmentCenter, sh, 4);
-    NSGradient *fade = [[NSGradient alloc] initWithStartingColor:[NSColor colorWithWhite:0 alpha:0] endingColor:[NSColor colorWithWhite:0 alpha:0.85]];
-    [fade drawInRect:NSMakeRect(0, BANNER_H - 36, br.size.width, 36) angle:90];
-    [accent_dim() setFill]; NSRectFill(NSMakeRect(0, BANNER_H, br.size.width, 1.5));
+    NSGradient *foot = [[NSGradient alloc] initWithColorsAndLocations:rgb(0, 0, 0, 0), 0.62, rgb(0.03, 0.08, 0.22, 0.94), 1.0, nil];
+    [foot drawInRect:in angle:90];
+    [NSGraphicsContext restoreGraphicsState];
 }
+- (void)setNeedsArt { [self.cache removeAllObjects]; self.artGen++; self.needsDisplay = YES; }
+/* what the still part of the window depends on: when it changes, the still part is drawn again */
+- (NSString *)signature
+{
+    NSMutableString *s = [NSMutableString stringWithFormat:@"%ld|%ld|%ld|%ld|%d|%@|%ld|%.0f", (long)self.open, (long)self.focus, (long)self.hover, (long)self.pressed,
+                          self.keyed, self.note ?: @"", (long)self.artGen, self.scale];
+    for (DSRow *r in self.top) [s appendFormat:@"|%ld", (long)r.index];
+    for (DSSection *sec in self.sections) { [s appendFormat:@"|%@", sec.summary ? sec.summary() : @""]; for (DSRow *r in sec.rows) [s appendFormat:@",%ld%@", (long)r.index, r.choices[r.index][@"label"]]; }
+    return s;
+}
+static int frames_drawn;   /* (DS_LAUNCHER_TIMING: frames a second, in the window) */
 - (void)drawRect:(NSRect)dirty
 {
-    NSRect b = self.bounds;
-    NSShadow *sh = [NSShadow new]; sh.shadowColor = [NSColor colorWithWhite:0 alpha:0.9]; sh.shadowOffset = NSMakeSize(0, -1); sh.shadowBlurRadius = 3;
-    [[NSColor colorWithWhite:0.04 alpha:1] setFill]; NSRectFill(b);
-    if (self.backdrop) draw_cover(self.backdrop, b, 0.55);              /* the game's texture, darker below the banner */
-    NSGradient *vig = [[NSGradient alloc] initWithColorsAndLocations:[NSColor colorWithWhite:0 alpha:0.25], 0.0, [NSColor colorWithWhite:0 alpha:0.75], 1.0, nil];
-    [vig drawInRect:b relativeCenterPosition:NSMakePoint(0, -0.1)];
-    [self drawBanner:NSMakeRect(0, 0, b.size.width, BANNER_H) shadow:sh];
-    /* the top level: the Controls row, then a button for each group with a summary under it */
-    NSInteger fly = self.open, foc = self.focus, hov = self.hover; self.open = -1;
-    if (fly >= 0) self.focus = self.hover = HIT_NONE;           /* under the panel: nothing lit */
-    [self drawPanel:NSMakeRect(54, TOP_Y, b.size.width - 108, 74 * self.top.count + 14)];
-    [self drawRows:sh];
+    NSRect b = self.bounds; CGFloat W = b.size.width, H = b.size.height; double T = self.t; frames_drawn++;
+    if (!self.cache) self.cache = [NSMutableDictionary dictionary];
+    if (![self.cache[@"scale"] isEqual:@(self.scale)]) { [self.cache removeAllObjects]; self.cache[@"scale"] = @(self.scale); }   /* (another display) */
+    [rgb(0.03, 0.07, 0.18, 1) setFill]; NSRectFill(b);
+    /* the backdrop under the grade */
+    fill_interp = NSImageInterpolationMedium; [self backdrop]; fill_interp = NSImageInterpolationHigh;
+    [self.grade drawInRect:b fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:@{NSImageHintInterpolation: @(NSImageInterpolationLow)}];
+    /* soft light rolling across; a glow behind the portrait and the title */
+    NSImage *mist = [self sprite:@"mist" colors:@[rgb(0.45, 0.62, 0.95, 1), rgb(0.35, 0.50, 0.85, 0.4), rgb(0.3, 0.4, 0.8, 0)]];
+    for (int i = 0; i < 7; i++) {
+        double sp = 0.5 + hash01(i * 3.1), y = H * (0.35 + 0.55 * hash01(i * 7.7)), r = 150 + 170 * hash01(i * 1.3);
+        double x = fmod(hash01(i * 5.9) * (W + 2 * r) + T * 8 * sp, W + 2 * r) - r;
+        draw_sprite(mist, NSMakePoint(x, y + 12 * sin(T * 0.2 + i)), r, r * 0.6, 0.13 + 0.05 * sin(T * 0.3 + i));
+    }
+    NSImage *fire = [self sprite:@"fire" colors:@[ember(1), blood(0.5), rgb(0, 0, 0, 0)]];
+    NSRect pr = self.portraitRect; double flick = 0.5 + 0.3 * sin(T * 2.1) + 0.2 * sin(T * 5.3 + 1.3);
+    draw_sprite(fire, NSMakePoint(NSMidX(pr), NSMaxY(pr) - 20), 380, 380, 0.22 + 0.10 * flick);
+    draw_sprite(fire, NSMakePoint(NSMidX(self.titleBox), NSMidY(self.titleBox) + 6), 330, 110, 0.20 + 0.08 * sin(T * 1.3));
+    /* plumbobs rising and turning, a glow round each; soft lights out of focus */
+    NSImage *halo = [self sprite:@"halo" colors:@[ember(0.9), ember(0.25), rgb(0, 0, 0, 0)]];
+    NSImage *glint = [self sprite:@"glint" colors:@[rgb(1.0, 0.98, 0.85, 1), rgb(0.85, 0.90, 1.0, 0.28), rgb(0, 0, 0, 0)]];
+    for (int i = 0; i < 12; i++) {
+        double sx = hash01(i * 3.33 + 1), sy = hash01(i * 4.21 + 9), sp = 0.4 + hash01(i * 0.91 + 5);
+        double y = H + 30 - fmod(sy * (H + 60) + T * 14 * sp, H + 60), x = sx * W + 24 * sin(T * 0.5 * sp + i);
+        double life = MIN(1.0, (H + 30 - y) / 80) * MIN(1.0, (y + 30) / 120); CGFloat hgt = (CGFloat)(9 + 9 * hash01(i * 7.7));
+        draw_sprite(halo, NSMakePoint(x, y), hgt * 1.6, hgt * 1.6, 0.35 * life);
+        plumbob(NSMakePoint(x, y), hgt, (CGFloat)(T * (0.8 + sp) + i), (CGFloat)(0.75 * life));
+    }
+    for (int i = 0; i < 46; i++) {
+        double sx = hash01(i * 1.618 + 2), sy = hash01(i * 2.414 + 7), sp = 0.3 + hash01(i * 0.577 + 3);
+        double y = fmod(sy * (H + 40) - T * 9 * sp, H + 40); if (y < 0) y += H + 40; y -= 20;
+        double x = fmod(sx * (W + 40) + 14 * sin(T * 0.5 * sp + i * 1.7), W + 40) - 20;
+        double tw = pow(fabs(sin(T * (0.5 + sp) + i * 2.3)), 4), a = 0.10 + 0.5 * tw;
+        draw_sprite(glint, NSMakePoint(x, y), 6 + 10 * hash01(i * 3.1), 6 + 10 * hash01(i * 3.1), a * 0.45);
+    }
+    /* the portrait (its frame is in the still part); the title, its glow breathing */
+    [self drawPortrait:NSInsetRect(pr, 13, 13)];
+    NSRect tout = NSInsetRect(self.titleBox, -40, -40);
+    [self.title drawInRect:tout fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil];
+    /* the still part: plates, cards, tiles, buttons, words, an open group's panel (drawn again only when what it shows changes) */
+    NSString *sig = self.signature;
+    if (!self.cache[@"ui"] || ![self.cache[@"uiSig"] isEqual:sig]) { self.cache[@"ui"] = offscreen(b.size, self.scale, ^{ [self drawStill]; }); self.cache[@"uiSig"] = sig; }
+    [(NSImage *)self.cache[@"ui"] drawInRect:b fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil];
+    /* Play: its fire breathing behind the wooden bar */
+    {
+        NSRect p = self.playRect; BOOL lit = self.hover == HIT_PLAY || (self.keyed && self.open < 0 && self.focus == self.firstBottom + 3);
+        draw_sprite(fire, NSMakePoint(NSMidX(p), NSMidY(p)), p.size.width * 0.75, p.size.height * 1.1, lit ? 0.55 : 0.28 + 0.10 * sin(T * 2.0));
+        [self drawButton:p title:@"PLAY" code:HIT_PLAY primary:YES];
+    }
+}
+/* the still part of the window (into a picture: see drawRect) */
+- (void)drawStill
+{
+    NSRect b = self.bounds; CGFloat W = b.size.width, H = b.size.height;
+    NSShadow *sh = drop(2, 0.9);
+    BOOL top = self.open < 0; NSInteger foc = self.keyed && top ? self.focus : HIT_NONE, hov = top ? self.hover : HIT_NONE;
+    /* the portrait's frame: iron, riveted, a brass rule and the place on a plaque at its foot; its window left clear */
+    {
+        NSRect pr = self.portraitRect, in = NSInsetRect(pr, 13, 13);
+        [NSGraphicsContext saveGraphicsState];
+        NSShadow *s2 = [NSShadow new]; s2.shadowColor = rgb(0, 0, 0, 0.85); s2.shadowBlurRadius = 18; s2.shadowOffset = NSMakeSize(0, -6); [s2 set];
+        [rgb(0.04, 0.08, 0.22, 1) setFill]; [[NSBezierPath bezierPathWithRoundedRect:pr xRadius:16 yRadius:16] fill];
+        [NSGraphicsContext restoreGraphicsState];
+        NSBezierPath *rp = [NSBezierPath bezierPathWithRoundedRect:pr xRadius:16 yRadius:16];
+        [[[NSGradient alloc] initWithColorsAndLocations:rgb(0.40, 0.58, 0.95, 1), 0.0, rgb(0.16, 0.30, 0.68, 1), 0.5, rgb(0.08, 0.17, 0.44, 1), 1.0, nil] drawInBezierPath:rp angle:-70];
+        [rgb(1, 1, 1, 0.55) setStroke]; NSBezierPath *rim = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(pr, 2, 2) xRadius:14 yRadius:14]; rim.lineWidth = 1.5; [rim stroke];
+        [rgb(0.02, 0.06, 0.18, 1) setStroke]; rp.lineWidth = 1.5; [rp stroke];
+        NSRectFillUsingOperation(in, NSCompositingOperationClear);
+        [rgb(0, 0, 0, 0.9) setStroke]; NSBezierPath *f1 = [NSBezierPath bezierPathWithRect:NSInsetRect(in, -1, -1)]; f1.lineWidth = 2; [f1 stroke];
+        plumbob(NSMakePoint(NSMidX(pr), pr.origin.y - 2), 22, 0.4, 1);
+        rule(in.origin.x + 24, NSMaxX(in) - 24, NSMaxY(in) - 42, 0.85);
+        ktext(@"THE NEIGHBOURHOOD", cp(14, YES), parchment(), 2, NSMakePoint(NSMidX(in), NSMaxY(in) - 34), NSTextAlignmentCenter);
+    }
+    /* under the title: the makers, the year, the tale */
+    rule(60, 540, 190, 0.6);
+    [NSGraphicsContext saveGraphicsState]; [sh set];
+    ktext(@"MAXIS  ·  2000  ·  THE LEGACY COLLECTION", cp(12.5, YES), gold(), 2.6, NSMakePoint(300, 200), NSTextAlignmentCenter);
+    { NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new]; ps.alignment = NSTextAlignmentCenter; ps.lineSpacing = 3;
+      [@"Build them a house, fill it with things, and keep your Sims fed, rested, loved and paid, from Livin' Large to Makin' Magic."
+          drawWithRect:NSMakeRect(66, 224, 468, 48) options:NSStringDrawingUsesLineFragmentOrigin
+          attributes:@{NSFontAttributeName: book(15.5, YES), NSForegroundColorAttributeName: rgb(0.92, 0.95, 1.0, 0.96), NSParagraphStyleAttributeName: ps}]; }
+    [NSGraphicsContext restoreGraphicsState];
+    /* the Game row: a card per choice (the game, the Test Lab) */
+    DSRow *mode = self.top.firstObject;
+    ktext(mode.title.uppercaseString, cp(12, YES), [gold() colorWithAlphaComponent:0.85], 4, NSMakePoint(48, 280), NSTextAlignmentLeft);
+    for (NSInteger k = 0; k < (NSInteger)mode.choices.count; k++) {
+        NSRect r = [self cardRect:k]; BOOL sel = k == mode.index, hv = hov == HIT_CARD + k, fc = foc == 0 && sel; NSDictionary *ch = mode.choices[k];
+        if (sel) {
+            [NSGraphicsContext saveGraphicsState]; NSShadow *gl = [NSShadow new]; gl.shadowColor = ember(0.6); gl.shadowBlurRadius = 16; [gl set];
+            [rgb(0.04, 0.10, 0.26, 1) setFill]; [[NSBezierPath bezierPathWithRoundedRect:r xRadius:10 yRadius:10] fill]; [NSGraphicsContext restoreGraphicsState];
+        }
+        [self plate:r lit:sel ? 0.5 : hv ? 0.4 : 0 edge:fc ? parchment() : sel ? gold() : hv ? [gold() colorWithAlphaComponent:0.75] : nil];
+        NSRect ir = NSMakeRect(r.origin.x + 7, r.origin.y + 7, r.size.width - 14, 70);
+        [NSGraphicsContext saveGraphicsState]; NSRectClip(ir);
+        [rgb(0.02, 0.05, 0.14, 1) setFill]; NSRectFill(ir);
+        NSImage *art = k < (NSInteger)self.cards.count ? self.cards[k] : nil;
+        if ([art isKindOfClass:NSImage.class]) draw_fill_z(art, ir, 1, 1.0, 0.5, 0.45);
+        [[[NSGradient alloc] initWithColors:@[rgb(0, 0, 0, 0), rgb(0, 0, 0, 0.45)]] drawInRect:ir angle:90];
+        if (!sel) { [rgb(0, 0, 0, hv ? 0.18 : 0.40) setFill]; NSRectFillUsingOperation(ir, NSCompositingOperationSourceOver); }
+        [NSGraphicsContext restoreGraphicsState];
+        [[gold() colorWithAlphaComponent:sel ? 0.7 : 0.3] setStroke]; NSBezierPath *fr = [NSBezierPath bezierPathWithRect:NSInsetRect(ir, -0.5, -0.5)]; fr.lineWidth = 1; [fr stroke];
+        draw_text([ch[@"label"] uppercaseString], cp(14, YES), sel ? parchment() : dim(), NSMakeRect(r.origin.x + 6, r.origin.y + 82, r.size.width - 12, 18), NSTextAlignmentCenter, sh);
+        draw_text(ch[@"note"] ?: @"", book(10.5, YES), sel ? rgb(0.86, 0.92, 1.0, 1) : dim(), NSMakeRect(r.origin.x + 14, r.origin.y + 101, r.size.width - 28, 16), NSTextAlignmentCenter, nil);
+    }
+    /* the settings: a tile per group, its first choice large, the rest under it */
+    ktext(@"SETTINGS", cp(12, YES), [gold() colorWithAlphaComponent:0.85], 4, NSMakePoint(48, 442), NSTextAlignmentLeft);
     for (NSInteger i = 0; i < (NSInteger)self.sections.count; i++) {
-        DSSection *s = self.sections[i]; NSRect r = [self sectionRect:i]; NSInteger code = HIT_SECTION + i;
-        if (fly < 0 && self.focus == (NSInteger)self.top.count + i) { [[accent() colorWithAlphaComponent:0.35] setFill]; NSRect g = NSInsetRect(r, -6, -6); [[NSBezierPath bezierPathWithRoundedRect:g xRadius:g.size.height / 2 yRadius:g.size.height / 2] fill]; }
-        [self drawButton:r title:s.title.uppercaseString code:code primary:NO];
-        NSString *sum = s.summary ? s.summary() : nil;
-        if (!sum) { NSMutableArray *l = [NSMutableArray array]; for (DSRow *row in s.rows) [l addObject:row.choices[row.index][@"label"]]; sum = [l componentsJoinedByString:@" · "]; }
-        draw_text(sum, body(12.5, NO), dim(), NSMakeRect(r.origin.x - 10, NSMaxY(r) + 8, r.size.width + 20, 32), NSTextAlignmentCenter, sh, 0);
+        DSSection *s = self.sections[i]; NSRect r = [self sectionRect:i]; BOOL hv = hov == HIT_SECTION + i, fc = foc == self.firstTile + i;
+        NSString *big, *small;
+        if (s.summary) { NSString *sum = s.summary(); NSRange d = [sum rangeOfString:@" · "];
+                         big = d.location == NSNotFound ? sum : [sum substringToIndex:d.location]; small = d.location == NSNotFound ? @"" : [sum substringFromIndex:NSMaxRange(d)]; }
+        else { NSMutableArray *l = [NSMutableArray array]; for (DSRow *row in s.rows) [l addObject:row.choices[row.index][@"label"]];
+               big = l.firstObject ?: @""; small = l.count > 1 ? [[l subarrayWithRange:NSMakeRange(1, l.count - 1)] componentsJoinedByString:@" · "] : (s.rows.firstObject.choices[s.rows.firstObject.index][@"note"] ?: @""); }
+        [self plate:r lit:hv || fc ? 1 : 0 edge:fc ? parchment() : hv ? gold() : nil];
+        ktext(s.title.uppercaseString, cp(12, YES), gold(), 2.5, NSMakePoint(r.origin.x + 15, r.origin.y + 12), NSTextAlignmentLeft);
+        draw_text(big, cp(17, YES), parchment(), NSMakeRect(r.origin.x + 15, r.origin.y + 31, r.size.width - 26, 22), NSTextAlignmentLeft, sh);
+        NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new]; ps.lineBreakMode = NSLineBreakByTruncatingTail;
+        [small drawWithRect:NSMakeRect(r.origin.x + 15, r.origin.y + 55, r.size.width - 24, 26) options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingTruncatesLastVisibleLine
+                 attributes:@{NSFontAttributeName: book(10.5, NO), NSForegroundColorAttributeName: dim(), NSParagraphStyleAttributeName: ps}];
     }
-    if (self.note.length) draw_text(self.note, body(12.5, NO), dim(), NSMakeRect(54, [self sectionRect:(NSInteger)self.sections.count - 1].origin.y + 98, b.size.width - 108, 34), NSTextAlignmentCenter, sh, 0);
-    self.open = fly; self.focus = foc; self.hover = hov;
-    /* an open group: a panel over the window */
-    if (self.open >= 0) {
-        [[NSColor colorWithWhite:0 alpha:0.6] setFill]; fill_over(b);
+    /* Saves and Game Files; Quit (Play is drawn live) */
+    rule(48, W - 48, 558, 0.35);
+    NSArray *small = @[@"SAVES", @"GAME FILES"]; NSArray *codes = @[@(HIT_SAVES), @(HIT_FILES)];
+    for (NSInteger k = 0; k < 2; k++) {
+        NSRect r = k ? self.filesRect : self.savesRect; NSInteger code = [codes[k] integerValue]; BOOL hv = hov == code, fc = foc == self.firstBottom + k;
+        [self plate:r lit:hv || fc ? 0.6 : 0 edge:fc ? parchment() : hv ? gold() : nil];
+        ktext(small[k], cp(13, YES), hv || fc ? parchment() : dim(), 2, NSMakePoint(NSMidX(r), r.origin.y + 12), NSTextAlignmentCenter);
+    }
+    /* an open group: a panel over the window, framed in iron */
+    if (!top) {
+        [rgb(0.0, 0.02, 0.08, 0.62) setFill]; NSRectFillUsingOperation(NSMakeRect(0, 0, W, 556), NSCompositingOperationSourceOver);
         NSRect f = self.flyRect;
-        [[NSColor colorWithSRGBRed:0.04 green:0.09 blue:0.32 alpha:1] setFill]; [[NSBezierPath bezierPathWithRoundedRect:f xRadius:18 yRadius:18] fill];
-        [[NSColor colorWithWhite:1 alpha:0.55] setStroke]; NSBezierPath *fp = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(f, 1, 1) xRadius:17 yRadius:17]; fp.lineWidth = 2; [fp stroke];
-        brackets(NSInsetRect(f, -5, -5), 22, 3, accent());
-        draw_text(self.sections[self.open].title, din(28), NSColor.whiteColor, NSMakeRect(f.origin.x, f.origin.y + 20, f.size.width, 36), NSTextAlignmentCenter, sh, 5);
-        [[accent_dim() colorWithAlphaComponent:0.6] setFill]; fill_over(NSMakeRect(f.origin.x + 30, f.origin.y + 60, f.size.width - 60, 1));
-        [self drawRows:sh];
+        [NSGraphicsContext saveGraphicsState]; NSShadow *s2 = [NSShadow new]; s2.shadowColor = rgb(0, 0, 0, 0.9); s2.shadowBlurRadius = 24; [s2 set];
+        [rgb(0.06, 0.13, 0.34, 0.97) setFill]; NSRectFill(NSInsetRect(f, 6, 6)); [NSGraphicsContext restoreGraphicsState];
+        [[NSColor colorWithWhite:0 alpha:0.35] setFill]; NSRectFillUsingOperation(NSInsetRect(f, 6, 6), NSCompositingOperationSourceOver);
+        [rgb(1, 1, 1, 0.4) setStroke]; NSBezierPath *fr2 = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(f, 3, 3) xRadius:14 yRadius:14]; fr2.lineWidth = 2; [fr2 stroke];
+        for (int k = 0; k < 0; k++) corner(NSMakePoint(k % 2 ? NSMaxX(f) - 14 : f.origin.x + 14, k / 2 ? NSMaxY(f) - 14 : f.origin.y + 14), k % 2 ? -1 : 1, k / 2 ? -1 : 1, 26, [gold() colorWithAlphaComponent:0.85]);
+        ktext(self.sections[self.open].title.uppercaseString, cp(26, YES), gold(), 5, NSMakePoint(NSMidX(f), f.origin.y + 26), NSTextAlignmentCenter);
+        rule(f.origin.x + 60, NSMaxX(f) - 60, f.origin.y + 66, 0.7);
+        for (NSInteger k = 0; k < (NSInteger)self.rows.count; k++) {
+            DSRow *row = self.rows[k]; NSRect r = [self rowRect:k]; NSDictionary *ch = row.choices[row.index];
+            if (k == self.focus) { [ember(0.14) setFill]; NSRectFillUsingOperation(NSInsetRect(r, -12, -3), NSCompositingOperationSourceOver);
+                                   [[gold() colorWithAlphaComponent:self.keyed ? 0.7 : 0.25] setStroke]; NSBezierPath *fb = [NSBezierPath bezierPathWithRect:NSInsetRect(r, -11.5, -2.5)]; fb.lineWidth = 1; [fb stroke]; }
+            draw_text(row.title.uppercaseString, cp(18, YES), gold(), NSMakeRect(r.origin.x, r.origin.y + 8, 300, 26), NSTextAlignmentLeft, sh);
+            [self drawArrow:[self arrow:k right:NO] right:NO lit:self.hover == 10 * k];
+            [self drawArrow:[self arrow:k right:YES] right:YES lit:self.hover == 10 * k + 2];
+            draw_text(ch[@"label"], cp(18, NO), self.hover == 10 * k + 1 ? NSColor.whiteColor : parchment(), [self valueRect:k], NSTextAlignmentCenter, sh);
+            draw_text(ch[@"note"] ?: @"", book(12, YES), dim(), NSMakeRect(NSMaxX(r) - 360, r.origin.y + 38, 360, 18), NSTextAlignmentCenter, nil);
+            if (k + 1 < (NSInteger)self.rows.count) { [rgb(0.55, 0.70, 1.0, 0.25) setFill]; NSRectFillUsingOperation(NSMakeRect(r.origin.x, NSMaxY(r) + 3, r.size.width, 1), NSCompositingOperationSourceOver); }
+        }
     }
-    [self drawButton:self.quitRect title:self.open >= 0 ? @"BACK" : @"QUIT" code:self.open >= 0 ? HIT_BACK : HIT_QUIT primary:NO];
-    [self drawButton:self.playRect title:@"PLAY" code:HIT_PLAY primary:YES];
+    [self drawButton:self.quitRect title:top ? @"QUIT" : @"BACK" code:top ? HIT_QUIT : HIT_BACK primary:NO];
+    NSString *hint = self.note.length ? self.note : !top ? @"Left and right change a row  ·  up and down move  ·  Esc goes back"
+                   : @"Click a card or a tile  ·  arrows move  ·  Return chooses  ·  P plays  ·  Esc quits";
+    draw_text(hint, book(12.5, NO), dim(), NSMakeRect(48, H - 30, W - 96 - 250, 18), NSTextAlignmentLeft, nil);
+    ktext(@"NATIVE FOR APPLE SILICON  ·  METAL", cp(10, NO), [dim() colorWithAlphaComponent:0.85], 3, NSMakePoint(W - 48, H - 27), NSTextAlignmentRight);
 }
 @end
 
+/* the plumbob: a green diamond (two pyramids, lit on one side), turning */
+static void plumbob(NSPoint c, CGFloat h, CGFloat turn, CGFloat alpha)
+{
+    CGFloat w = h * 0.42 * (0.55 + 0.45 * fabs(cos(turn))), mid = c.x + h * 0.42 * 0.35 * sin(turn);
+    NSPoint top = NSMakePoint(c.x, c.y - h), bot = NSMakePoint(c.x, c.y + h), l = NSMakePoint(c.x - w, c.y), r = NSMakePoint(c.x + w, c.y), m = NSMakePoint(mid, c.y);
+    NSBezierPath *a = [NSBezierPath bezierPath]; [a moveToPoint:top]; [a lineToPoint:l]; [a lineToPoint:m]; [a closePath];
+    NSBezierPath *b = [NSBezierPath bezierPath]; [b moveToPoint:top]; [b lineToPoint:m]; [b lineToPoint:r]; [b closePath];
+    NSBezierPath *cc = [NSBezierPath bezierPath]; [cc moveToPoint:bot]; [cc lineToPoint:l]; [cc lineToPoint:m]; [cc closePath];
+    NSBezierPath *d = [NSBezierPath bezierPath]; [d moveToPoint:bot]; [d lineToPoint:m]; [d lineToPoint:r]; [d closePath];
+    [rgb(0.62, 0.98, 0.50, alpha) setFill]; [a fill]; [rgb(0.36, 0.80, 0.26, alpha) setFill]; [b fill];
+    [rgb(0.30, 0.70, 0.22, alpha) setFill]; [cc fill]; [rgb(0.16, 0.50, 0.12, alpha) setFill]; [d fill];
+}
 // ---------------------------------------------------------------- choices, settings file, the window
 static NSInteger index_of(NSArray<NSDictionary *> *c, NSString *v, NSInteger dflt)
 {
@@ -295,7 +671,7 @@ static NSArray<NSDictionary *> *ui_choices(void)
 }
 static NSArray<NSDictionary *> *shape_choices(void)
 {
-    return @[@{@"value": @"wide", @"label": @"Widescreen", @"note": @"The Legacy Collection's wide view: more of the lot"},
+    return @[@{@"value": @"wide", @"label": @"Widescreen", @"note": @"The wide view: more of the lot"},
              @{@"value": @"4:3", @"label": @"Original 4:3", @"note": @"Bars at the sides, as the game first shipped"}];
 }
 static NSArray<NSDictionary *> *window_choices(void)
@@ -590,7 +966,7 @@ static BOOL update_run(NSWindow *parent, NSString *updater, NSString *branch, NS
  * to an image instead (development; DS_LAUNCHER_OPEN=<group> renders that group's panel open). */
 int ds_launcher_run(const char *game_dir, const char *data_dir)
 {
-    NSString *data = @(data_dir), *plistPath = [data stringByAppendingPathComponent:@"launcher.plist"]; (void)game_dir;
+    NSString *data = getenv("DS_LAUNCHER_HOME") ? @(getenv("DS_LAUNCHER_HOME")) : @(data_dir), *plistPath = [data stringByAppendingPathComponent:@"launcher.plist"]; (void)game_dir;
     NSDictionary *saved = [NSDictionary dictionaryWithContentsOfFile:plistPath] ?: @{};
     DSRow *res = [DSRow new], *ui = [DSRow new], *shape = [DSRow new], *window = [DSRow new], *notch = [DSRow new], *fps = [DSRow new];
     ui.title = @"Interface Size"; ui.choices = ui_choices(); ui.index = index_of(ui.choices, saved[@"interface"], 0);
@@ -636,12 +1012,18 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     BOOL shotMode = shot != NULL;
     DSSection *display = [DSSection new], *graphics = [DSSection new], *controls = [DSSection new], *saves = [DSSection new], *updSec = [DSSection new];
     graphics.title = @"Graphics"; graphics.rows = @[shadows, lighting, effects, terrain];
+    graphics.summary = ^NSString * {   /* the tile: how many are on, then each */
+        NSInteger on = 0; NSMutableArray *l = [NSMutableArray array];
+        for (DSRow *r in @[shadows, lighting, effects]) { BOOL yes = r.index == 0; on += yes; [l addObject:[NSString stringWithFormat:@"%@ %@", [r.title componentsSeparatedByString:@" "].lastObject, yes ? @"on" : @"off"]]; }
+        [l addObject:[NSString stringWithFormat:@"Terrain %@", [terrain.choices[terrain.index][@"label"] lowercaseString]]];
+        return [NSString stringWithFormat:@"%@ · %@", on == 3 ? @"Full Detail" : on == 0 ? @"Lightest" : @"Custom", [l componentsJoinedByString:@" · "]];
+    };
     controls.title = @"Controls"; controls.rows = @[edge, pinch];
     display.title = @"Display"; display.rows = has_notch() ? @[res, ui, window, notch, fps] : @[res, ui, window, fps];
-    saves.title = @"Saves"; saves.summary = ^NSString * { return @"Your neighbourhoods, in Finder"; };
+    saves.title = @"Saves";
     updSec.title = @"Updates"; updSec.summary = ^NSString * { NSDictionary *c = upd.choices[upd.index]; return [c[@"note"] length] ? [NSString stringWithFormat:@"%@ · %@", c[@"label"], c[@"note"]] : c[@"label"]; };
-    DSLaunchView *v = [[DSLaunchView alloc] initWithFrame:NSMakeRect(0, 0, 780, 700)];
-    v.top = @[shape]; v.sections = @[display, graphics, controls, saves, updSec]; v.open = -1; v.hover = v.pressed = HIT_NONE;
+    DSLaunchView *v = [[DSLaunchView alloc] initWithFrame:NSMakeRect(0, 0, 980, 660)];
+    v.top = @[shape]; v.sections = @[display, graphics, controls, updSec]; v.open = -1; v.hover = v.pressed = HIT_NONE; v.focus = 0;
     v.note = gameGfx ? @"Zoom: the wheel, a pinch, or the game's buttons. Cmd-Q asks the game to quit, as its own Quit does."
                      : @"Graphics settings take effect from the second start (the game makes its settings file the first time).";
     __weak DSLaunchView *wv = v; __weak DSRow *wu = upd;
@@ -654,6 +1036,8 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
         [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:dir]];
     };
     updSec.activate = ^{ if (wu.activate) wu.activate(); };
+    v.onSaves = ^{ if (saves.activate) saves.activate(); };   /* the game's neighbourhoods, in Finder */
+    v.onFiles = ^{ [NSWorkspace.sharedWorkspace openURL:[NSURL fileURLWithPath:@(game_dir)]]; };
     void (^check)(void) = ^{
         if (!updater) return;
         ustate = UPD_CHECKING; wu.choices = update_choice(ustate, branch, built, nil); wv.needsDisplay = YES;
@@ -684,9 +1068,19 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
         }
         check();
     };
-    v.backdrop = art(data, @"backdrop"); v.shot = art(data, @"shot");
     NSImage *logo = art(data, @"logo"); v.logo = logo ? trimmed(logo, 0) : nil;
-    if (shot) {   /* development: the window as an image */
+    {   /* the slides: the store's screenshots, the library banner, the game's own loading screen; the capsule framed */
+        NSMutableArray<NSImage *> *sc = [NSMutableArray array];
+        NSImage *hero = ready(art(data, @"shot"), 1920), *setup = ready(art(data, @"setup"), 1200), *bd = ready(art(data, @"backdrop"), 1600);
+        for (int k = 1; k <= 8; k++) { NSImage *i = ready(art(data, [NSString stringWithFormat:@"slide-%d", k]), 1920); if (i) [sc addObject:i]; if (k == 2 && hero) [sc addObject:hero]; if (k == 4 && setup) [sc addObject:setup]; }
+        if (!sc.count) { if (hero) [sc addObject:hero]; if (setup) [sc addObject:setup]; if (bd) [sc addObject:bd]; }
+        v.scenes = sc;
+        NSImage *pt = ready(art(data, @"portrait"), 900);
+        if (pt) { v.portrait = pt; v.portraitFx = 0.5; v.portraitFy = 0.16; v.portraitZ = 1.0; }
+        else if (hero) { v.portrait = hero; v.portraitFx = 0.5; v.portraitFy = 0.5; v.portraitZ = 1.0; }
+        v.cards = @[hero ?: sc.firstObject ?: (id)NSNull.null, setup ?: sc.lastObject ?: (id)NSNull.null];   /* Widescreen, Original 4:3 */
+    }
+    if (shot) {   /* development: the window as an image, twice its size */
         const char *open = getenv("DS_LAUNCHER_OPEN");
         if (open) for (NSInteger i = 0; i < (NSInteger)v.sections.count; i++) if ([v.sections[i].title caseInsensitiveCompare:@(open)] == NSOrderedSame) v.open = i;
         if (getenv("DS_LAUNCHER_PICK")) {                 /* "4:3" (Screen Shape), or "Row Title=value,..." for any row */
@@ -698,7 +1092,18 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
                 for (DSRow *r in all) if ([r.title caseInsensitiveCompare:two[0]] == NSOrderedSame) r.index = index_of(r.choices, two[1], r.index);
             }
         }
-        NSBitmapImageRep *rep = [v bitmapImageRepForCachingDisplayInRect:v.bounds]; [v cacheDisplayInRect:v.bounds toBitmapImageRep:rep];
+        if (getenv("DS_LAUNCHER_FOCUS")) { v.focus = atoi(getenv("DS_LAUNCHER_FOCUS")); v.keyed = YES; }
+        if (v.open >= 0) v.focus = 0;
+        v.t = getenv("DS_LAUNCHER_TIME") ? atof(getenv("DS_LAUNCHER_TIME")) : 4.0;
+        NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL pixelsWide:(NSInteger)v.bounds.size.width * 2 pixelsHigh:(NSInteger)v.bounds.size.height * 2
+                                                                    bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO colorSpaceName:NSCalibratedRGBColorSpace bytesPerRow:0 bitsPerPixel:0];
+        rep.size = v.bounds.size;
+        [v displayRectIgnoringOpacity:v.bounds inContext:[NSGraphicsContext graphicsContextWithBitmapImageRep:rep]];
+        if (getenv("DS_LAUNCHER_TIMING")) {
+            double t0 = CACurrentMediaTime();
+            for (int k = 0; k < 60; k++) { v.t += 1.0 / 60; [v displayRectIgnoringOpacity:v.bounds inContext:[NSGraphicsContext graphicsContextWithBitmapImageRep:rep]]; }
+            fprintf(stderr, "frame: %.1f ms\n", (CACurrentMediaTime() - t0) * 1000 / 60);
+        }
         [[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:@(shot) atomically:YES];
         if (getenv("DS_LAUNCHER_APPLY")) {             /* development: what Play would do */
             finish(); printf("game: %s; Options.iff: %s\n", getenv("SIMS_GAME_RES") ?: "-", (options_resolution(data) ?: @"(none)").UTF8String);
@@ -717,7 +1122,32 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowWillCloseNotification object:w queue:nil usingBlock:^(NSNotification *n) { (void)n; [NSApp stopModal]; }];
     [NSApp activateIgnoringOtherApps:YES];
     [w makeKeyAndOrderFront:nil];
+    /* the animation, 60 times a second (in the modal loop's mode too); a controller: the d-pad or the left stick moves
+     * (held: repeats), A chooses, B goes back, Start plays */
+    double t0 = CACurrentMediaTime(); __block int held = 0; __block double next = 0; __block uint32_t was = 0;
+    [GCController startWirelessControllerDiscoveryWithCompletionHandler:nil];
+    NSTimer *anim = [NSTimer timerWithTimeInterval:1.0 / 60 repeats:YES block:^(NSTimer *tm) {
+        DSLaunchView *sv = wv; if (!sv) return;
+        double t = sv.t = CACurrentMediaTime() - t0;
+        GCExtendedGamepad *g = (GCController.current ?: GCController.controllers.firstObject).extendedGamepad;
+        if (g && NSApp.active && sv.window.isKeyWindow) {
+            float x = g.leftThumbstick.xAxis.value, y = g.leftThumbstick.yAxis.value;
+            int dir = g.dpad.left.pressed || x < -0.6f ? NAV_LEFT : g.dpad.right.pressed || x > 0.6f ? NAV_RIGHT
+                    : g.dpad.up.pressed || y > 0.6f ? NAV_UP : g.dpad.down.pressed || y < -0.6f ? NAV_DOWN : 0;
+            if (dir != held) { held = dir; next = t + 0.38; if (dir) [sv nav:dir]; }
+            else if (dir && t >= next) { next = t + 0.14; [sv nav:dir]; }
+            uint32_t now = (g.buttonA.pressed ? 1u : 0) | (g.buttonB.pressed ? 2u : 0) | (g.buttonMenu.pressed ? 4u : 0), down = now & ~was; was = now;
+            if (down & 1) [sv nav:NAV_OK]; else if (down & 2) [sv nav:NAV_BACK]; else if (down & 4) [sv nav:NAV_PLAY];
+        } else { held = 0; was = 0; }
+        sv.needsDisplay = YES;
+        static double lastT; if (getenv("DS_LAUNCHER_TIMING") && t - lastT >= 1) {   /* development: frames a second, then quits after 6 */
+            fprintf(stderr, "fps: %.0f\n", frames_drawn / (t - lastT)); frames_drawn = 0; lastT = t; if (t > 6) [NSApp stopModal]; }
+    }];
+    [[NSRunLoop currentRunLoop] addTimer:anim forMode:NSRunLoopCommonModes];
+    if (getenv("DS_LAUNCHER_PLAY"))   /* testing: Play after a moment, as if clicked */
+        [[NSRunLoop currentRunLoop] addTimer:[NSTimer timerWithTimeInterval:1.5 repeats:NO block:^(NSTimer *tm) { if (wv.onPlay) wv.onPlay(); }] forMode:NSRunLoopCommonModes];
     [NSApp runModalForWindow:w];
+    [anim invalidate];
     [w orderOut:nil];
     if (!result) return 0;
     finish();
